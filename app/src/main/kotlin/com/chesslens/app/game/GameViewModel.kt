@@ -15,10 +15,13 @@ import com.chesslens.chess.MoveClassifier
 import com.chesslens.chess.MoveQuality
 import com.chesslens.chess.Piece
 import com.chesslens.chess.PlayedMove
+import com.chesslens.chess.PositionGuesser
 import com.chesslens.chess.San
 import com.chesslens.chess.SearchLimits
 import com.chesslens.chess.Tactics
 import com.chesslens.vision.BoardQuad
+import com.chesslens.vision.BoardScan
+import com.chesslens.vision.ScanInterpreter
 import com.chesslens.vision.TrackingPhase
 import com.chesslens.vision.VisionEvent
 import com.chesslens.vision.VisionFrame
@@ -106,6 +109,35 @@ sealed interface UiEvent {
     data object BoardLocked : UiEvent
 }
 
+/** Where the set-up position came from. */
+enum class SetupSource { NONE, SCAN_EXACT, SCAN_GUESS, STANDARD }
+
+/**
+ * "New game" set-up: the camera reads the position off the board, the user checks the squares
+ * it is unsure about and says whose move it is.
+ */
+data class SetupState(
+    val scanning: Boolean = true,
+    /** 0..1 while still frames are being collected. */
+    val progress: Float = 0f,
+    val boardSeen: Boolean = false,
+    /** The camera looks at the board too flatly for tall pieces not to hide squares. */
+    val tooFlat: Boolean = false,
+    /** Offer to scan from the current angle anyway. */
+    val canForce: Boolean = false,
+    val squares: IntArray = Board.startPosition().squares.copyOf(),
+    val side: Int = Piece.WHITE,
+    val castling: Int = 15,
+    val uncertain: Set<Int> = emptySet(),
+    val selected: Int = -1,
+    /** Board orientation the scan found (applied when the game starts). */
+    val orientation: Int? = null,
+    val source: SetupSource = SetupSource.NONE,
+) {
+    val problem: String? get() = if (scanning) null else PositionGuesser.problem(squares, side)
+    val pieceCount: Int get() = squares.count { it != 0 }
+}
+
 class GameViewModel(app: Application) : AndroidViewModel(app) {
     private val store = SettingsStore(app)
     private val engine = EngineService(20, "engine")
@@ -128,6 +160,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<UiEvent> = _events
+
+    private val _setup = MutableStateFlow<SetupState?>(null)
+    /** Non-null while the "New game" set-up is open. */
+    val setup: StateFlow<SetupState?> = _setup
+    private var setupStartNs = 0L
+    private var lastUnrecognizedNs = 0L
 
     /** Vision pipeline (thread-confined to the camera analyzer except for its request methods). */
     val pipeline: VisionPipeline? by lazy {
@@ -205,6 +243,97 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         pipeline?.requestResync(afterMotion = false)
         refresh(viewPly = 0)
         analyzeCurrent()
+    }
+
+    // ---------------------------------------------------------------- new game set-up
+
+    /** Opens the set-up and asks the camera to read the position. */
+    fun startSetup() {
+        val p = pipeline
+        setupStartNs = System.nanoTime()
+        if (p == null) {
+            _setup.value = SetupState(scanning = false, source = SetupSource.STANDARD)
+            return
+        }
+        _setup.value = SetupState(scanning = true)
+        p.requestScan()
+    }
+
+    fun setupRescan(anyAngle: Boolean = false) {
+        val p = pipeline ?: return
+        setupStartNs = System.nanoTime()
+        _setup.update { it?.copy(scanning = true, progress = 0f, canForce = false, selected = -1) }
+        p.requestScan(anyAngle)
+    }
+
+    fun setupStandard() {
+        pipeline?.cancelScan()
+        _setup.update {
+            it?.copy(
+                scanning = false, squares = Board.startPosition().squares.copyOf(), side = Piece.WHITE, castling = 15,
+                uncertain = emptySet(), selected = -1, source = SetupSource.STANDARD,
+            )
+        }
+    }
+
+    fun setupSelect(sq: Int) = _setup.update { s -> s?.copy(selected = if (s.selected == sq) -1 else sq) }
+
+    /** Puts [piece] (0 = empty) on the selected square. */
+    fun setupPlace(piece: Int) = _setup.update { s ->
+        if (s == null || s.selected < 0) s
+        else s.copy(squares = s.squares.copyOf().also { it[s.selected] = piece }, uncertain = s.uncertain - s.selected)
+    }
+
+    fun setupSide(side: Int) = _setup.update { it?.copy(side = side) }
+
+    fun setupCancel() {
+        pipeline?.cancelScan()
+        _setup.value = null
+    }
+
+    fun setupConfirm() {
+        val s = _setup.value ?: return
+        if (s.scanning || s.problem != null) return
+        val fen = PositionGuesser.fen(s.squares, s.side, s.castling)
+        val ok = runCatching { Board.fromFen(fen) }.isSuccess
+        if (!ok) {
+            banner("That position can't be played", error = true)
+            return
+        }
+        s.orientation?.let { o -> if (o != _vision.value?.orientation) pipeline?.setOrientation(o) }
+        _setup.value = null
+        newGame(fen)
+        banner("New game · ${if (s.side == Piece.WHITE) "White" else "Black"} to move")
+    }
+
+    /** Analyzer thread: scan progress and results. */
+    private fun onSetupFrame(frame: VisionFrame) {
+        val s = _setup.value ?: return
+        if (!s.scanning) return
+        val scan = frame.scan
+        if (scan == null) {
+            val seen = frame.phase == TrackingPhase.LOCKED
+            val flat = seen && frame.steepness < BoardScan.MIN_STEEPNESS
+            val progress = frame.scanProgress ?: 0f
+            val force = flat && System.nanoTime() - setupStartNs > 3_000_000_000L
+            if (seen != s.boardSeen || flat != s.tooFlat || force != s.canForce || kotlin.math.abs(progress - s.progress) > 0.01f) {
+                _setup.update { it?.copy(boardSeen = seen, tooFlat = flat, canForce = force, progress = progress) }
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.Main) {
+            val known = (0..game.moves.size).map { game.boardAt(it) }
+            val current = game.current.copy()
+            val r = kotlinx.coroutines.withContext(Dispatchers.Default) { ScanInterpreter.interpret(scan, known, current) }
+            val g = r.guess
+            _setup.update {
+                it?.copy(
+                    scanning = false, progress = 1f, squares = g.squares, side = g.side, castling = g.castling,
+                    uncertain = g.uncertain, selected = -1, orientation = r.orientation,
+                    source = if (g.exact) SetupSource.SCAN_EXACT else SetupSource.SCAN_GUESS,
+                )
+            }
+        }
     }
 
     fun goToPly(ply: Int) {
@@ -300,21 +429,33 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         if (frame.phase == TrackingPhase.LOCKED && lastPhase != TrackingPhase.LOCKED) _events.tryEmit(UiEvent.BoardLocked)
         lastPhase = frame.phase
 
+        onSetupFrame(frame)
+        // While a new game is being set up the board doesn't show the app position.
+        if (_setup.value != null) return
+
         when (val e = frame.event) {
             is VisionEvent.MoveDetected -> viewModelScope.launch(Dispatchers.Main) {
                 // Only accept if the app position hasn't changed meanwhile.
-                if (boardUsed === visionBoard) {
+                if (boardUsed === visionBoard && _setup.value == null) {
                     if (!_state.value.isLive) refresh(viewPly = game.moves.size)
                     // A move and an instant reply arrive together; play them in order.
+                    val sans = ArrayList<String>()
                     for (m in e.moves) {
                         if (m !in game.current.legalMoves()) break
+                        sans += San.of(game.current, m)
                         playMove(m, fromCamera = true)
                     }
+                    // A shaky read: say what was played so a wrong one is undone right away.
+                    if (sans.isNotEmpty() && e.confidence < 0.5f) banner("Read ${sans.joinToString(" ")} · Undo if that's wrong")
                 }
             }
             is VisionEvent.Unrecognized -> viewModelScope.launch(Dispatchers.Main) {
                 _events.tryEmit(UiEvent.Unrecognized(e.squares))
-                banner("Couldn't read that move — tap it on the mini board", error = true)
+                val now = System.nanoTime()
+                if (now - lastUnrecognizedNs > 8_000_000_000L) {
+                    lastUnrecognizedNs = now
+                    banner("Couldn't read that move — tap it on the mini board", error = true)
+                }
             }
             else -> Unit
         }

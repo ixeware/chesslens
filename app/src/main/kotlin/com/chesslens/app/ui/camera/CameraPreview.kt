@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.chesslens.app.game.FrameMapper
 import com.chesslens.app.game.GameViewModel
 import com.chesslens.vision.CvUtils
+import com.chesslens.vision.FrameBuffers
 import java.util.concurrent.Executors
 
 private const val ANALYSIS_MAX_SIDE = 640
@@ -29,6 +30,8 @@ private const val ANALYSIS_MAX_SIDE = 640
 class BoardAnalyzer(private val vm: GameViewModel) : ImageAnalysis.Analyzer {
     @Volatile
     private var sensorToView: Matrix? = null
+
+    private val buffers = FrameBuffers()
 
     override fun getTargetCoordinateSystem(): Int = ImageAnalysis.COORDINATE_SYSTEM_VIEW_REFERENCED
 
@@ -41,10 +44,16 @@ class BoardAnalyzer(private val vm: GameViewModel) : ImageAnalysis.Analyzer {
             val pipeline = vm.pipeline ?: return
             val plane = image.planes[0]
             val rotation = image.imageInfo.rotationDegrees
-            val gray = CvUtils.grayFromPlane(plane.buffer, image.width, image.height, plane.rowStride, rotation, ANALYSIS_MAX_SIDE)
+            val gray = CvUtils.grayFromPlane(plane.buffer, image.width, image.height, plane.rowStride, rotation, ANALYSIS_MAX_SIDE, buffers)
+            // Skin mask from the chroma planes: a hand resting over the board holds back move reads.
+            val skin = if (image.planes.size >= 3) runCatching {
+                val u = image.planes[1]
+                val v = image.planes[2]
+                CvUtils.skinFromChroma(u.buffer, v.buffer, image.width, image.height, u.rowStride, u.pixelStride, rotation, ANALYSIS_MAX_SIDE, buffers)
+            }.getOrNull() else null
             try {
                 val board = vm.visionBoard
-                val frame = pipeline.process(gray, board, vm.autoOrientation)
+                val frame = pipeline.process(gray, board, vm.autoOrientation, skin)
                 // CameraX reports sensor -> view. Our coordinates are in the analysis buffer, so
                 // go buffer -> sensor first (inverse of the image's sensor -> buffer transform).
                 val mapper = sensorToView?.let { s2v ->
@@ -56,6 +65,7 @@ class BoardAnalyzer(private val vm: GameViewModel) : ImageAnalysis.Analyzer {
                 vm.onVisionFrame(frame, mapper, board)
             } finally {
                 gray.release()
+                skin?.release()
             }
         }
     }

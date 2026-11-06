@@ -146,17 +146,21 @@ fun BevelIconButton(icon: ImageVector, description: String, modifier: Modifier =
 
 /** The one primary action per screen: green light pooled at the bottom, like a lit key. */
 @Composable
-fun GlowButton(text: String, icon: ImageVector?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun GlowButton(text: String, icon: ImageVector?, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val shape = RoundedCornerShape(18.dp)
     Row(
         modifier
             .heightIn(min = 52.dp)
-            .shadow(14.dp, shape, ambientColor = Lens.GreenGlow, spotColor = Lens.GreenGlow)
+            .then(if (enabled) Modifier.shadow(14.dp, shape, ambientColor = Lens.GreenGlow, spotColor = Lens.GreenGlow) else Modifier)
             .clip(shape)
             .drawBehind {
                 drawRect(Color(0xFF00351A))
+                if (!enabled) {
+                    drawRect(Color(0xFF1A1F1C))
+                    return@drawBehind
+                }
                 drawRect(
                     Brush.radialGradient(
                         listOf(if (pressed) Color(0xFF1BC96A) else Color(0xFF2CF08B), Color(0xFF00532A), Color(0xFF00351A)),
@@ -167,13 +171,14 @@ fun GlowButton(text: String, icon: ImageVector?, onClick: () -> Unit, modifier: 
             }
             .border(1.dp, Color.Black, shape)
             .border(1.dp, Brush.verticalGradient(0f to Color(0x55FFFFFF), 0.4f to Color.Transparent, 1f to Color(0x33FFFFFF)), shape)
-            .clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), role = Role.Button, onClick = onClick)
+            .clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), role = Role.Button, enabled = enabled, onClick = onClick)
             .padding(horizontal = 22.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
     ) {
-        if (icon != null) Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
-        Text(text, style = MaterialTheme.typography.labelLarge.copy(fontSize = MaterialTheme.typography.titleLarge.fontSize), color = Color.White)
+        val fg = if (enabled) Color.White else Lens.TextFaint
+        if (icon != null) Icon(icon, null, tint = fg, modifier = Modifier.size(22.dp))
+        Text(text, style = MaterialTheme.typography.labelLarge.copy(fontSize = MaterialTheme.typography.titleLarge.fontSize), color = fg)
     }
 }
 

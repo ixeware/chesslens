@@ -22,6 +22,12 @@ data class VisionFrame(
     val processingMs: Long,
     /** Per-square change magnitudes from the last move evaluation (a1 = 0), if any. */
     val squareChanges: DoubleArray? = null,
+    /** Result of a requested position scan (once). */
+    val scan: BoardScan? = null,
+    /** 0..1 while a scan is collecting still frames; null when no scan is pending. */
+    val scanProgress: Float? = null,
+    /** How steeply the camera looks down at the board (1 = straight down). */
+    val steepness: Float = 1f,
 )
 
 /**
@@ -96,11 +102,35 @@ class VisionPipeline {
     }
 
     /**
+     * Reads the position off the board over the next few still frames (see [BoardScanner]).
+     * @param anyAngle scan even from a low, oblique view
+     */
+    fun requestScan(anyAngle: Boolean = false) {
+        scanAnyAngle = anyAngle
+        scanRequested = true
+    }
+
+    fun cancelScan() {
+        scanRequested = false
+    }
+
+    private val scanner = BoardScanner()
+    @Volatile private var scanRequested = false
+    @Volatile private var scanAnyAngle = false
+    private val scanAcc = Mat()
+    private val scanTmp = Mat()
+    private var scanCount = 0
+
+    /**
      * @param gray upright grayscale frame (not retained)
      * @param board the position the board currently shows
      * @param autoOrientation work out which side White sits on from the pieces when locking
      */
-    fun process(gray: Mat, board: Board, autoOrientation: Boolean): VisionFrame {
+    /**
+     * @param skin optional skin mask aligned with [gray] (see [CvUtils.skinFromChroma]): a hand
+     *   over or at the edge of the board blocks move reading even when it holds still
+     */
+    fun process(gray: Mat, board: Board, autoOrientation: Boolean, skin: Mat? = null): VisionFrame {
         val t0 = System.nanoTime()
         frameIndex++
         orientationOverride?.let {
@@ -141,15 +171,28 @@ class VisionPipeline {
 
         val quad = tracker.quad
         var out = MoveDetector.Output(0.0, false)
+        var scan: BoardScan? = null
+        var scanProgress: Float? = null
+        var steep = 1f
+        val hand = phase == TrackingPhase.LOCKED && quad != null && skin != null && handVisible(skin, quad)
         if (phase == TrackingPhase.LOCKED && quad != null) {
             CvUtils.warpBoard(gray, quad, Cells.SIZE, warpMat)
             // Screens add moiré and pixel-grid texture: smooth it before comparing structure.
             if (surface == BoardSurface.SCREEN) org.opencv.imgproc.Imgproc.GaussianBlur(warpMat, warpMat, org.opencv.core.Size(3.0, 3.0), 0.0)
             val px = CvUtils.bytes(warpMat)
-            out = moveDetector.process(px, board, orientation, cameraDirection(quad, gray.rows()), visibility(quad, gray.cols(), gray.rows()), quad)
+            out = moveDetector.process(px, board, orientation, cameraDirection(quad, gray.rows()), visibility(quad, gray.cols(), gray.rows()), quad, hand)
+            val cam = if (surface == BoardSurface.SCREEN) Pt(0f, 0f) else BoardScanner.cameraDir(quad, gray.rows())
+            steep = if (surface == BoardSurface.SCREEN) 1f else BoardScanner.steepness(quad, cam)
+            if (scanRequested) {
+                scan = collectScan(quad, cam, steep, out, hand, gray)
+                scanProgress = if (scan != null) 1f else scanCount.toFloat() / SCAN_FRAMES
+            }
+        } else if (scanRequested) {
+            scanCount = 0
+            scanProgress = 0f
         }
         val t3 = System.nanoTime()
-        lastTimings = "${moveDetector.lastNote} snap=${"%.1f".format(lastSnap)} lk=$trackMs pre=${(t1 - t0) / 1000000} locate/track=${(t2 - t1) / 1000000} moves=${(t3 - t2) / 1000000}"
+        lastTimings = "${moveDetector.lastNote} skin=${"%.3f".format(lastSkin)}/${"%.3f".format(skinBaseline)} snap=${"%.1f".format(lastSnap)} lk=$trackMs pre=${(t1 - t0) / 1000000} locate/track=${(t2 - t1) / 1000000} moves=${(t3 - t2) / 1000000} grid[${grid.lastTimings}]"
         return VisionFrame(
             imageWidth = gray.cols(),
             imageHeight = gray.rows(),
@@ -162,7 +205,42 @@ class VisionPipeline {
             detectionScore = lastScore,
             processingMs = (System.nanoTime() - t0) / 1_000_000,
             squareChanges = out.squareChanges,
+            scan = scan,
+            scanProgress = scanProgress,
+            steepness = steep,
         )
+    }
+
+    /** Averages still frames of the rectified board; scans once enough are in. */
+    private fun collectScan(quad: BoardQuad, cam: Pt, steep: Float, out: MoveDetector.Output, hand: Boolean, gray: Mat): BoardScan? {
+        val still = !out.handOverBoard && !hand && out.motion <= moveDetector.tuning.motionThreshold
+        if (!still || (steep < BoardScan.MIN_STEEPNESS && !scanAnyAngle)) {
+            scanCount = 0
+            return null
+        }
+        warpMat.convertTo(scanTmp, org.opencv.core.CvType.CV_32F)
+        if (scanCount == 0) scanTmp.copyTo(scanAcc) else org.opencv.core.Core.add(scanAcc, scanTmp, scanAcc)
+        scanCount++
+        if (scanCount < SCAN_FRAMES) return null
+        scanAcc.convertTo(scanTmp, org.opencv.core.CvType.CV_8U, 1.0 / scanCount)
+        val px = CvUtils.bytes(scanTmp)
+        scanCount = 0
+        scanRequested = false
+        return scanner.scan(px, orientation, cam, visibleCells(quad, gray.cols(), gray.rows()), steep)
+    }
+
+    /** Board-space cells (row-major) entirely inside the frame. */
+    private fun visibleCells(q: BoardQuad, w: Int, h: Int): BooleanArray {
+        val m = 2f
+        val hm = q.boardToImage
+        return BooleanArray(64) { c ->
+            val col = c % 8
+            val row = c / 8
+            listOf(0 to 0, 1 to 0, 1 to 1, 0 to 1).all { (dx, dy) ->
+                val p = hm.map((col + dx).toFloat(), (row + dy).toFloat())
+                p.x > m && p.y > m && p.x < w - m && p.y < h - m
+            }
+        }
     }
 
     private fun search(gray: Mat, board: Board, autoOrientation: Boolean) {
@@ -214,6 +292,7 @@ class VisionPipeline {
     }
 
     private fun lock(q: BoardQuad, gray: Mat, autoOrientation: Boolean, locatorOrientation: Int?) {
+        skinBaseline = -1.0
         tracker.reset(q, gray)
         moveDetector.reset()
         lastLock = q
@@ -236,6 +315,25 @@ class VisionPipeline {
             }
         }
     }
+
+    private val skinWarp = Mat()
+    private var skinBaseline = -1.0
+
+    /**
+     * Skin-coloured area over the board and a margin around it, compared with what the board
+     * itself shows when no hand is around (wooden boards are skin-coloured too).
+     */
+    private fun handVisible(skin: Mat, quad: BoardQuad): Boolean {
+        CvUtils.warpBoard(skin, quad.inset(-0.08f, -0.08f, -0.08f, -0.08f), 64, skinWarp)
+        val frac = org.opencv.core.Core.mean(skinWarp).`val`[0] / 255.0
+        if (skinBaseline < 0) skinBaseline = frac
+        val hand = frac > skinBaseline + 0.012
+        if (!hand) skinBaseline = skinBaseline * 0.95 + frac * 0.05
+        lastSkin = frac
+        return hand
+    }
+
+    private var lastSkin = 0.0
 
     /** Squares entirely inside the frame (the board may run off the edge). */
     private fun visibility(q: BoardQuad, w: Int, h: Int): BooleanArray {
@@ -279,5 +377,13 @@ class VisionPipeline {
     fun release() {
         tracker.release()
         warpMat.release()
+        skinWarp.release()
+        scanAcc.release()
+        scanTmp.release()
+    }
+
+    companion object {
+        /** Still frames averaged for a position scan. */
+        const val SCAN_FRAMES = 6
     }
 }

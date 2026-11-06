@@ -25,7 +25,7 @@ dependencies {
 tasks.test {
     maxHeapSize = "2g"
     // Optional local debugging hooks (see DebugDump).
-    listOf("chesslens.debugDir", "chesslens.framesDir", "chesslens.replayDir", "chesslens.surface", "chesslens.stopAt").forEach { key ->
+    listOf("chesslens.debugDir", "chesslens.framesDir", "chesslens.replayDir", "chesslens.surface", "chesslens.stopAt", "chesslens.noSkin", "chesslens.scanAt").forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }
     testLogging { showStandardStreams = System.getProperty("chesslens.debugDir") != null }

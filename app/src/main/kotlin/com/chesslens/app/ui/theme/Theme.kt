@@ -45,6 +45,8 @@ object Lens {
 
     // Secondary signals.
     val Yellow = Color(0xFFF7D64A)
+    /** "Check this": squares or values the app isn't sure about. */
+    val Amber = Color(0xFFFFB020)
     val YellowText = Color(0xFF3A2C00)
     val Red = Color(0xFFFF5A5F)
     val Blue = Color(0xFF4F95FF)

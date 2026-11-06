@@ -73,6 +73,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.chesslens.app.ChessLensApplication
 import com.chesslens.app.game.GameViewModel
+import com.chesslens.app.game.SetupState
 import com.chesslens.app.game.Settings
 import com.chesslens.app.game.UiEvent
 import com.chesslens.app.game.UiState
@@ -120,7 +121,9 @@ data class CameraActions(
 @Composable
 fun CameraScreen(vm: GameViewModel, onExit: () -> Unit, onOpenAnalysis: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val vision by vm.vision.collectAsStateWithLifecycle()
+    // Not read here: camera-rate updates must only redraw the AR layer and the HUD.
+    val visionState = vm.vision.collectAsStateWithLifecycle()
+    val setup by vm.setup.collectAsStateWithLifecycle()
     val speaking by vm.speech.speaking.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var hasPermission by remember {
@@ -152,7 +155,7 @@ fun CameraScreen(vm: GameViewModel, onExit: () -> Unit, onOpenAnalysis: () -> Un
         onSettings = vm::updateSettings,
         onUndo = vm::undo,
         onMove = vm::playFromTo,
-        onNewGame = { vm.newGame() },
+        onNewGame = vm::startSetup,
         onSetFen = { vm.newGame(it) },
         onRotate = vm::rotateBoard,
         onFlip = vm::flipBoard,
@@ -165,7 +168,16 @@ fun CameraScreen(vm: GameViewModel, onExit: () -> Unit, onOpenAnalysis: () -> Un
             Toast.makeText(context, "PGN copied", Toast.LENGTH_SHORT).show()
         },
     )
-    CameraScreenContent(state, vision, speaking, fx, torch, actions) {
+    val setupActions = SetupActions(
+        onSelect = vm::setupSelect,
+        onPlace = vm::setupPlace,
+        onSide = vm::setupSide,
+        onRescan = vm::setupRescan,
+        onStandard = vm::setupStandard,
+        onCancel = vm::setupCancel,
+        onStart = vm::setupConfirm,
+    )
+    CameraScreenContent(state, { visionState.value }, speaking, fx, torch, actions, setup, setupActions) {
         when {
             !hasPermission -> PermissionPrompt { launcher.launch(Manifest.permission.CAMERA) }
             !ChessLensApplication.openCvReady -> Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -206,11 +218,13 @@ private fun KeepScreenOn() {
 @Composable
 fun CameraScreenContent(
     state: UiState,
-    vision: VisionUi?,
+    vision: () -> VisionUi?,
     speaking: String?,
     fx: OverlayFx,
     torch: Boolean,
     actions: CameraActions,
+    setup: SetupState? = null,
+    setupActions: SetupActions = SetupActions(),
     preview: @Composable () -> Unit,
 ) {
     var calibrating by remember { mutableStateOf(false) }
@@ -223,27 +237,35 @@ fun CameraScreenContent(
         val viewport: @Composable (Modifier) -> Unit = { m ->
             Box(m) {
                 preview()
-                ArOverlay(vision, state, fx, Modifier.fillMaxSize())
+                ArOverlay(vision, state, fx, Modifier.fillMaxSize(), setup)
                 if (calibrating) {
                     CornerEditor(
-                        initial = vision?.viewQuad,
+                        initial = vision()?.viewQuad,
                         onDone = { actions.onCorners(it); calibrating = false },
                         onCancel = { calibrating = false },
                     )
                 } else {
-                    Hud(state, vision, speaking, torch, actions, onCalibrate = { calibrating = true })
+                    Hud(state, vision, speaking, torch, actions, onCalibrate = { calibrating = true }, settingUp = setup != null)
                 }
             }
         }
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
                 viewport(Modifier.weight(1f).fillMaxHeight())
-                SidePanel(state, actions, onSettings = { showSettings = true }, onGame = { showMenu = true }, modifier = Modifier.width(300.dp).fillMaxHeight())
+                if (setup != null) {
+                    SetupPanel(setup, setupActions, landscape = true, modifier = Modifier.width(320.dp).fillMaxHeight().panelSurface(top = false).statusBarsPadding().navigationBarsPadding().padding(12.dp))
+                } else {
+                    SidePanel(state, actions, onSettings = { showSettings = true }, onGame = { showMenu = true }, modifier = Modifier.width(300.dp).fillMaxHeight())
+                }
             }
         } else {
             Column(Modifier.fillMaxSize()) {
                 viewport(Modifier.weight(1f).fillMaxWidth())
-                BottomPanel(state, actions, onSettings = { showSettings = true }, onGame = { showMenu = true })
+                if (setup != null) {
+                    SetupPanel(setup, setupActions, landscape = false, modifier = Modifier.fillMaxWidth().panelSurface(top = true).navigationBarsPadding().padding(12.dp))
+                } else {
+                    BottomPanel(state, actions, onSettings = { showSettings = true }, onGame = { showMenu = true })
+                }
             }
         }
         if (showSettings) SettingsSheet(state.settings, actions.onSettings) { showSettings = false }
@@ -272,15 +294,25 @@ fun CameraScreenContent(
     }
 }
 
+/** Panel background with the hairline towards the camera view. */
+private fun Modifier.panelSurface(top: Boolean): Modifier = this
+    .background(Lens.Slab)
+    .drawBehind {
+        if (top) drawLine(Lens.Line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx())
+        else drawLine(Lens.Line, Offset(0f, 0f), Offset(0f, size.height), 1.dp.toPx())
+    }
+
 @Composable
 private fun Hud(
     state: UiState,
-    vision: VisionUi?,
+    visionRead: () -> VisionUi?,
     speaking: String?,
     torch: Boolean,
     actions: CameraActions,
     onCalibrate: () -> Unit,
+    settingUp: Boolean = false,
 ) {
+    val vision = visionRead()
     val info = state.analysis?.takeIf { it.fen == state.position.fen }
     val screen = state.settings.surface == BoardSurface.SCREEN
     Box(Modifier.fillMaxSize().statusBarsPadding().padding(12.dp)) {
@@ -319,6 +351,7 @@ private fun Hud(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val hint = when {
+                settingUp -> null
                 vision == null || vision.phase == TrackingPhase.SEARCHING -> if (screen) "Fit the whole screen board in view" else "Fit the whole board in view"
                 vision.phase == TrackingPhase.LOST -> "Hold steady, re-acquiring"
                 vision.handOverBoard -> "Watching the move"

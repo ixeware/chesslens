@@ -11,6 +11,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.chesslens.app.game.OverlayMode
 import com.chesslens.app.game.PlayAs
+import com.chesslens.app.game.SetupSource
+import com.chesslens.app.game.SetupState
 import com.chesslens.app.game.UiState
 import com.chesslens.app.ui.analysis.AnalysisActions
 import com.chesslens.app.ui.analysis.AnalysisContent
@@ -72,19 +74,45 @@ class ScreenshotTest {
     }
 
     @Composable
-    private fun CameraScene(state: UiState, orientation: Int, fx: OverlayFx, speaking: String?) {
+    private fun CameraScene(state: UiState, orientation: Int, fx: OverlayFx, speaking: String?, setup: SetupState? = null, backdrop: IntArray = state.position.squares) {
         var quad by remember { mutableStateOf<List<Offset>?>(null) }
         CameraScreenContent(
             state = state,
-            vision = quad?.let { DemoData.vision(it, orientation) },
+            vision = { quad?.let { DemoData.vision(it, orientation) } },
             speaking = speaking,
             fx = fx,
             torch = false,
             actions = CameraActions(),
+            setup = setup,
         ) {
-            if (state.settings.surface == BoardSurface.SCREEN) DemoScreenBackdrop(state.position.squares, orientation, onQuad = { quad = it })
-            else DemoBackdrop(state.position.squares, orientation, onQuad = { quad = it })
+            if (state.settings.surface == BoardSurface.SCREEN) DemoScreenBackdrop(backdrop, orientation, onQuad = { quad = it })
+            else DemoBackdrop(backdrop, orientation, onQuad = { quad = it })
         }
+    }
+
+    /** New game mid-way: the camera has read a middlegame; two squares to check, Black to move. */
+    @Test
+    @Config(qualifiers = "w400dp-h860dp-port-xhdpi")
+    fun setupScanned() {
+        val fen = "r1bq1rk1/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQ1RK1 b - - 0 5"
+        val board = com.chesslens.chess.Board.fromFen(fen)
+        val state = DemoData.state(DemoData.game(emptyList()), null, OverlayMode.HINT, PlayAs.BOTH)
+        val setup = SetupState(
+            scanning = false, progress = 1f, boardSeen = true, squares = board.squares.copyOf(), side = com.chesslens.chess.Piece.BLACK,
+            castling = 0, uncertain = setOf(com.chesslens.chess.Square.parse("c4"), com.chesslens.chess.Square.parse("c5")),
+            selected = com.chesslens.chess.Square.parse("c4"), orientation = 0, source = SetupSource.SCAN_GUESS,
+        )
+        shoot("setup_scanned", 1.3) { CameraScene(state, orientation = 0, fx = OverlayFx(), speaking = null, setup = setup, backdrop = board.squares) }
+    }
+
+    /** Scanning: the sweep crosses the board; the panel asks for a steeper view. */
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-land-xhdpi")
+    fun setupScanning() {
+        val board = com.chesslens.chess.Board.fromFen("r1bq1rk1/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQ1RK1 b - - 0 5")
+        val state = DemoData.state(DemoData.game(emptyList()), null, OverlayMode.HINT, PlayAs.BOTH)
+        val setup = SetupState(scanning = true, progress = 0.5f, boardSeen = true, tooFlat = true, canForce = true)
+        shoot("setup_scanning", 0.7) { CameraScene(state, orientation = 0, fx = OverlayFx(), speaking = null, setup = setup, backdrop = board.squares) }
     }
 
     /** Like the video: playing Black from the near side; opponent's last move in yellow, best move glowing. */

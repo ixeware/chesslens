@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.withFrameNanos
+import com.chesslens.app.game.SetupState
 import com.chesslens.app.game.UiState
 import com.chesslens.app.game.VisionUi
 import com.chesslens.app.ui.theme.Lens
@@ -115,7 +116,15 @@ private class QuadSmoother {
  * threats, hanging pieces, a control heat-map and a floating evaluation bar.
  */
 @Composable
-fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifier = Modifier) {
+fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifier = Modifier, setup: SetupState? = null) =
+    ArOverlay({ vision }, state, fx, modifier, setup)
+
+/**
+ * [vision] is read only while drawing, so camera-rate updates redraw this layer without
+ * recomposing the rest of the screen.
+ */
+@Composable
+fun ArOverlay(vision: () -> VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifier = Modifier, setup: SetupState? = null) {
     val density = LocalDensity.current.density
     val context = LocalContext.current
     val painter = remember(density) {
@@ -135,6 +144,7 @@ fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifi
 
     Canvas(modifier.fillMaxSize()) {
         val now = frame.value
+        val vision = vision()
         val hand = vision?.handOverBoard == true
         val quad = smoother.update(if (vision?.phase == TrackingPhase.SEARCHING) null else vision?.viewQuad, hand, now)
         if (vision == null || quad == null) {
@@ -143,6 +153,12 @@ fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifi
         }
         if (!state.settings.arEnabled) {
             drawBrackets(painter, ArProjector(quad, vision.orientation), now, fx, alpha = 0.6f)
+            return@Canvas
+        }
+        if (setup != null) {
+            // New game set-up: show what the scan reads instead of game hints.
+            drawBrackets(painter, ArProjector(quad, vision.orientation), now, fx, alpha = 0.8f)
+            drawSetupScan(painter, ArProjector(quad, setup.orientation ?: vision.orientation, flat = state.settings.surface == BoardSurface.SCREEN), setup, now)
             return@Canvas
         }
         val pj = ArProjector(quad, vision.orientation, flat = state.settings.surface == BoardSurface.SCREEN)
@@ -315,6 +331,49 @@ private fun DrawScope.drawLockSweep(p: Fx, pj: ArProjector, now: Long, lockNs: L
         if (a < 0.02f) continue
         p.line(this, pj.board(k.toFloat(), 0f), pj.board(k.toFloat(), 8f), Lens.Neon, p.dp(1.5f), a, glow = p.dp(5f))
         p.line(this, pj.board(0f, k.toFloat()), pj.board(8f, k.toFloat()), Lens.Neon, p.dp(1.5f), a, glow = p.dp(5f))
+    }
+}
+
+/**
+ * Set-up scan: a sweep crosses the board while frames are collected; afterwards each read piece
+ * gets a dot in its colour and squares the scan is unsure about get an amber outline.
+ */
+private fun DrawScope.drawSetupScan(p: Fx, pj: ArProjector, setup: SetupState, now: Long) {
+    if (setup.scanning) {
+        // A scan line sweeps the board with a fading band behind it.
+        val period = 1.8f
+        val t = ((now / 1e9f) % period) / period
+        val v = t * 8f
+        val strength = 0.45f + 0.55f * setup.progress
+        val tail = 1.6f
+        val steps = 8
+        for (i in 0 until steps) {
+            val v0 = (v - tail * (i + 1) / steps).coerceAtLeast(0f)
+            val v1 = (v - tail * i / steps).coerceAtLeast(0f)
+            if (v1 <= v0) continue
+            val band = Path().apply {
+                val a = pj.board(0f, v0); val b = pj.board(8f, v0); val c = pj.board(8f, v1); val d = pj.board(0f, v1)
+                moveTo(a.x, a.y); lineTo(b.x, b.y); lineTo(c.x, c.y); lineTo(d.x, d.y); close()
+            }
+            p.fill(this, band, Lens.Neon, 0.16f * strength * (1f - i.toFloat() / steps))
+        }
+        p.line(this, pj.board(0f, v), pj.board(8f, v), Lens.Neon, p.dp(5f), 0.5f * strength, glow = p.dp(8f))
+        p.line(this, pj.board(0f, v), pj.board(8f, v), Lens.NeonSoft, p.dp(2f), strength)
+        return
+    }
+    for (sq in 0 until 64) {
+        val piece = setup.squares[sq]
+        val unsure = sq in setup.uncertain
+        if (unsure) {
+            val pulse = 0.55f + 0.35f * sin(now / 1e9f * 5f)
+            p.stroke(this, pj.squarePath(sq, 0.07f), Lens.Amber, p.dp(2f), pulse, glow = p.dp(6f))
+        }
+        if (piece == 0) continue
+        val c = pj.center(sq)
+        val r = pj.squareSize(sq) * 0.14f
+        val white = Piece.color(piece) == Piece.WHITE
+        p.circle(this, c, r, if (white) Color.White else Color(0xFF101010), 0.9f)
+        p.circle(this, c, r, if (unsure) Lens.Amber else Lens.Neon, 1f, strokeWidth = p.dp(1.5f))
     }
 }
 

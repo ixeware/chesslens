@@ -44,8 +44,13 @@ class VideoReplay {
         for ((i, f) in frames.withIndex()) {
             if (System.getProperty("chesslens.stopAt")?.toInt()?.let { i > it } == true) break
             frameNo = i
-            val gray = Imgcodecs.imread(f.absolutePath, Imgcodecs.IMREAD_GRAYSCALE)
-            val fr = pipeline.process(gray, board, autoOrientation = board.plyCount == 0)
+            val color = Imgcodecs.imread(f.absolutePath, Imgcodecs.IMREAD_COLOR)
+            val gray = Mat()
+            Imgproc.cvtColor(color, gray, Imgproc.COLOR_BGR2GRAY)
+            val skin = if (System.getProperty("chesslens.noSkin") == null) CvUtils.skinFromBgr(color) else null
+            val fr = pipeline.process(gray, board, autoOrientation = board.plyCount == 0, skin = skin)
+            skin?.release()
+            color.release()
             totalMs += fr.processingMs
             maxMs = maxOf(maxMs, fr.processingMs)
             if (fr.processingMs > 150) log.append("frame $i: slow ${fr.processingMs}ms phase=${fr.phase} motion=${"%.1f".format(fr.motion)} hand=${fr.handOverBoard} ${pipeline.lastTimings}\n")

@@ -41,7 +41,12 @@ class GridLocator(private val workSize: Int = 400) {
      * @param expected pieces (a1 = 0) the board should show: picks the window and orientation
      *   whose occupancy and piece colours match best (used when locking)
      */
+    /** Per-stage timings of the last call (debugging). */
+    var lastTimings = ""
+        private set
+
     fun locate(gray: Mat, prior: BoardQuad? = null, expected: IntArray? = null): Result? {
+        val t0 = System.nanoTime()
         val scale = minOf(1.0, workSize.toDouble() / max(gray.cols(), gray.rows()))
         val small = Mat()
         Imgproc.resize(gray, small, Size(gray.cols() * scale, gray.rows() * scale), 0.0, 0.0, Imgproc.INTER_AREA)
@@ -55,18 +60,25 @@ class GridLocator(private val workSize: Int = 400) {
             small.release()
             return null
         }
+        val t1 = System.nanoTime()
         val refined = subPix(small, corners)
-        val lattice = fitLattice(refined)
+        val t2 = System.nanoTime()
+        val s = scale.toFloat()
+        val priorSmall = prior?.map { Pt(it.x * s, it.y * s) }
+        // While tracking, the previous lock predicts the lattice: no search needed.
+        val lattice = priorSmall?.let { fitFromPrior(refined, it) } ?: fitLattice(refined)
+        val t3 = System.nanoTime()
+        lastTimings = "pre=${(t1 - t0) / 1000000} subpix=${(t2 - t1) / 1000000} lattice=${(t3 - t2) / 1000000} n=${corners.size}"
         if (lattice == null || lattice.coords.size < 10) {
             small.release()
             return null
         }
-        val s = scale.toFloat()
-        val priorSmall = prior?.map { Pt(it.x * s, it.y * s) }
         val placed0 = placeWindow(lattice, small, px, w, h, response, priorSmall, expected)
         small.release()
         placed0 ?: return null
+        val t4 = System.nanoTime()
         val placed = refitInterior(lattice, placed0)
+        lastTimings += " place=${(t4 - t3) / 1000000} refit=${(System.nanoTime() - t4) / 1000000}"
         val inv = 1f / s
         return Result(placed.quad.map { Pt(it.x * inv, it.y * inv) }, lattice.coords.size, placed.score, placed.orientation)
     }
@@ -225,6 +237,39 @@ class GridLocator(private val workSize: Int = 400) {
         }
     }
 
+    /**
+     * Lattice from corners near where [prior] (image coordinates of the working image) puts
+     * the board's interior corners; null if too few agree.
+     */
+    private fun fitFromPrior(pts: List<Pt>, prior: BoardQuad): Lattice? {
+        var toBoard = prior.imageToBoard
+        var used = HashMap<Int, IntArray>()
+        repeat(2) { round ->
+            val next = HashMap<Int, IntArray>()
+            val taken = HashSet<Long>()
+            for ((k, p) in pts.withIndex()) {
+                val b = toBoard.map(p)
+                val u = b.x.roundToInt()
+                val v = b.y.roundToInt()
+                if (u !in 1..7 || v !in 1..7) continue
+                if (abs(b.x - u) > 0.22f || abs(b.y - v) > 0.22f) continue
+                if (!taken.add((u.toLong() shl 32) or v.toLong())) continue
+                next[k] = intArrayOf(u, v)
+            }
+            if (next.size < 12) return if (round == 0) null else used.takeIf { it.size >= 12 }?.let { lattice(it, pts) }
+            used = next
+            val h = refit(used, pts) ?: return null
+            toBoard = h.inverse()
+        }
+        return lattice(used, pts)
+    }
+
+    private fun lattice(used: Map<Int, IntArray>, pts: List<Pt>): Lattice? {
+        val h = refit(used, pts) ?: return null
+        val entries = used.entries.toList()
+        return Lattice(h, entries.map { it.value }, entries.map { pts[it.key] })
+    }
+
     private fun fitLattice(pts: List<Pt>): Lattice? {
         // Typical spacing: median nearest-neighbour distance.
         val nnAll = pts.indices.map { i -> pts.indices.filter { it != i }.minOf { pts[it].dist(pts[i]) } }.sorted()
@@ -234,8 +279,10 @@ class GridLocator(private val workSize: Int = 400) {
         var best: Lattice? = null
         val order = pts.indices.sortedBy { (it * 7919) % pts.size } // deterministic shuffle
         var tries = 0
+        var lastGain = 0
         for (i in order) {
-            if (tries > 160) break
+            // Stop when more seeds stop finding a bigger lattice.
+            if (tries > 160 || (best != null && tries - lastGain > 50)) break
             val nb = index.knn(i, 6, spacing * 2.2f)
             val p = pts[i]
             for (a in nb.indices) for (b in a + 1 until nb.size) {
@@ -254,7 +301,10 @@ class GridLocator(private val workSize: Int = 400) {
                 tries++
                 val seed = Homography.fromPoints(listOf(Pt(0f, 0f), Pt(1f, 0f), Pt(0f, 1f), Pt(1f, 1f)), listOf(p, pa, pb, pts[qi]))
                 val grown = grow(seed, pts, index, spacing, listOf(i, nb[a], nb[b], qi), listOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(0, 1), intArrayOf(1, 1)))
-                if (grown != null && (best == null || grown.coords.size > best.coords.size)) best = grown
+                if (grown != null && (best == null || grown.coords.size > best.coords.size)) {
+                    best = grown
+                    lastGain = tries
+                }
                 if ((best?.coords?.size ?: 0) >= 42) return best
             }
         }

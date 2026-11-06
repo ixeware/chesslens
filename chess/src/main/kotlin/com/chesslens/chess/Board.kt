@@ -122,27 +122,7 @@ class Board private constructor() {
     /** True if [sq] is attacked by any piece of colour [by]. */
     fun isAttacked(sq: Int, by: Int): Boolean = isAttacked(sq, by, squares)
 
-    private fun isAttacked(sq: Int, by: Int, bd: IntArray): Boolean {
-        val pawn = Piece.make(by, PAWN)
-        for (p in Tables.pawnAttacks[by xor 1][sq]) if (bd[p] == pawn) return true
-        val knight = Piece.make(by, KNIGHT)
-        for (p in Tables.knight[sq]) if (bd[p] == knight) return true
-        val king = Piece.make(by, KING)
-        for (p in Tables.king[sq]) if (bd[p] == king) return true
-        val rook = Piece.make(by, ROOK)
-        val bishop = Piece.make(by, BISHOP)
-        val queen = Piece.make(by, QUEEN)
-        for (d in 0 until 8) {
-            val straight = d < 4
-            for (t in Tables.rays[d][sq]) {
-                val p = bd[t]
-                if (p == 0) continue
-                if (p == queen || (straight && p == rook) || (!straight && p == bishop)) return true
-                break
-            }
-        }
-        return false
-    }
+    private fun isAttacked(sq: Int, by: Int, bd: IntArray): Boolean = attackedOn(bd, sq, by)
 
     /** All squares holding pieces of colour [by] that attack [sq] on board [bd]. */
     fun attackers(sq: Int, by: Int, bd: IntArray = squares): List<Int> {
@@ -559,6 +539,30 @@ class Board private constructor() {
         }
 
         fun startPosition(): Board = fromFen(START_FEN)
+
+        /** True if [sq] is attacked by colour [by] on the placement [bd]. */
+        fun attackedOn(bd: IntArray, sq: Int, by: Int): Boolean {
+            val pawn = Piece.make(by, PAWN)
+            for (p in Tables.pawnAttacks[by xor 1][sq]) if (bd[p] == pawn) return true
+            val knight = Piece.make(by, KNIGHT)
+            for (p in Tables.knight[sq]) if (bd[p] == knight) return true
+            val king = Piece.make(by, KING)
+            for (p in Tables.king[sq]) if (bd[p] == king) return true
+            val rook = Piece.make(by, ROOK)
+            val bishop = Piece.make(by, BISHOP)
+            val queen = Piece.make(by, QUEEN)
+            for (d in 0 until 8) {
+                val straight = d < 4
+                for (t in Tables.rays[d][sq]) {
+                    val p = bd[t]
+                    if (p == 0) continue
+                    if (p == queen || (straight && p == rook) || (!straight && p == bishop)) return true
+                    break
+                }
+            }
+            return false
+        }
+
 
         fun fromFen(fen: String): Board {
             val b = Board()

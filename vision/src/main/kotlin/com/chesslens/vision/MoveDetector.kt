@@ -325,6 +325,7 @@ class MoveDetector(surface: BoardSurface = BoardSurface.PHYSICAL) {
         cameraDir: Pt = Pt(0f, 0.15f),
         visible: BooleanArray? = null,
         view: BoardQuad? = null,
+        handSeen: Boolean = false,
     ): Output {
         this.visible = visible
         this.view = view
@@ -338,7 +339,7 @@ class MoveDetector(surface: BoardSurface = BoardSurface.PHYSICAL) {
             return Output(0.0, false)
         }
         val motion = motionLevel(warped, p, board, orientation)
-        if (motion > t.motionThreshold) {
+        if (motion > t.motionThreshold || handSeen) {
             stableCount = 0
             sawMotion = true
             return Output(motion, true)
@@ -539,9 +540,10 @@ class MoveDetector(surface: BoardSurface = BoardSurface.PHYSICAL) {
         }
         val single = pick(singles)
 
-        // A move and an immediate reply (online opponents, pre-moves, or a hand that left late).
-        // Preferred over a single move only when it explains clearly more of the picture.
-        if (weak.size >= 3) {
+        // A move and an immediate reply (online opponents, pre-moves). Screens only: on a real
+        // board each move is made by hand, and a hand lingering at the edge would otherwise be
+        // read as a second move.
+        if (tuning.structural && weak.size >= 3) {
             val pairs = ArrayList<Cand>()
             for (m1 in legal) {
                 work.makeMove(m1)
