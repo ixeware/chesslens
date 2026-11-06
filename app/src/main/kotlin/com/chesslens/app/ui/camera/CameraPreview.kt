@@ -45,8 +45,13 @@ class BoardAnalyzer(private val vm: GameViewModel) : ImageAnalysis.Analyzer {
             try {
                 val board = vm.visionBoard
                 val frame = pipeline.process(gray, board, vm.autoOrientation)
-                val mapper = sensorToView?.let {
-                    FrameMapper(image.width, image.height, rotation, FrameMapper.scaleFor(image.width, image.height, ANALYSIS_MAX_SIDE), it)
+                // CameraX reports sensor -> view. Our coordinates are in the analysis buffer, so
+                // go buffer -> sensor first (inverse of the image's sensor -> buffer transform).
+                val mapper = sensorToView?.let { s2v ->
+                    val bufferToView = Matrix()
+                    image.imageInfo.sensorToBufferTransformMatrix.invert(bufferToView)
+                    bufferToView.postConcat(s2v)
+                    FrameMapper(image.width, image.height, rotation, FrameMapper.scaleFor(image.width, image.height, ANALYSIS_MAX_SIDE), bufferToView)
                 }
                 vm.onVisionFrame(frame, mapper, board)
             } finally {

@@ -166,6 +166,15 @@ class VisionTest {
         var i = 0
         while (i < seq.size) {
             val pairUp = i == instantReplyAt
+            val dbg = System.getProperty("chesslens.debugDir")
+            var shotNo = 0
+            if (dbg != null) pipeline.debugEval = { cur, ref ->
+                val m = org.opencv.core.Mat(Cells.SIZE, Cells.SIZE * 2, org.opencv.core.CvType.CV_8UC1)
+                val a = org.opencv.core.Mat(Cells.SIZE, Cells.SIZE, org.opencv.core.CvType.CV_8UC1); a.put(0, 0, ref)
+                val b = org.opencv.core.Mat(Cells.SIZE, Cells.SIZE, org.opencv.core.CvType.CV_8UC1); b.put(0, 0, cur)
+                a.copyTo(m.colRange(0, Cells.SIZE)); b.copyTo(m.colRange(Cells.SIZE, Cells.SIZE * 2))
+                org.opencv.imgcodecs.Imgcodecs.imwrite("$dbg/screen_${surface}_${seq[i]}_${shotNo++}.png", m)
+            }
             val moves = if (pairUp) listOf(seq[i], seq[i + 1]) else listOf(seq[i])
             val after = game.copy()
             val ms = moves.map { u -> after.parseUci(u)!!.also { after.makeMove(it) } }
@@ -175,7 +184,8 @@ class VisionTest {
             highlight = com.chesslens.chess.Move.from(last) to com.chesslens.chess.Move.to(last)
             var detected: List<Int>? = null
             repeat(8) {
-                val e = feed(SyntheticScreen.render(after, highlight, seed++, flicker = (seed % 3) * 2.0)).event
+                val fr = feed(SyntheticScreen.render(after, highlight, seed++, flicker = (seed % 3) * 2.0))
+                val e = fr.event
                 if (e is VisionEvent.MoveDetected) detected = e.moves
             }
             val d = detected
@@ -222,5 +232,18 @@ class VisionTest {
         org.junit.Assume.assumeTrue(System.getProperty("chesslens.debugDir") != null)
         val seq = listOf("e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "a7a6")
         println("physical mode on screen: ${playScreenGame(BoardSurface.PHYSICAL, seq)}")
+    }
+
+    /** The X-corner locator finds a board that runs off the edge of the frame. */
+    @Test fun gridLocatorHandlesBoardOffFrame() {
+        val outer = tilted.map { Pt(it.x + 110f, it.y + 20f) }
+        val img = SyntheticBoard.render(Board.startPosition(), outer, orientation = 2, seed = 4)
+        val r = GridLocator().locate(img, expected = Board.startPosition().squares)
+        assertNotNull("not found", r)
+        val truth = SyntheticBoard.gridOf(outer)
+        val err = r!!.quad.alignedTo(truth).maxCornerDistance(truth)
+        println("off-frame grid error=${"%.2f".format(err)}px inliers=${r.inliers} orientation=${r.orientation}")
+        assertTrue("corner error $err", err < 4f)
+        assertEquals(2, r.orientation)
     }
 }

@@ -14,10 +14,11 @@ class FrameMapper(
     private val rotation: Int,
     /** Analysis downscale factor applied before rotation. */
     private val scale: Float,
-    sensorToView: Matrix,
+    /** Analysis buffer (unrotated ImageProxy pixels) -> PreviewView coordinates. */
+    bufferToView: Matrix,
 ) {
-    private val toView = Matrix(sensorToView)
-    private val fromView = Matrix().also { sensorToView.invert(it) }
+    private val toView = Matrix(bufferToView)
+    private val fromView = Matrix().also { bufferToView.invert(it) }
     private val w = rawWidth * scale
     private val h = rawHeight * scale
 

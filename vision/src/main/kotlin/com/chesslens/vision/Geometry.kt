@@ -131,6 +131,15 @@ data class BoardQuad(val corners: List<Pt>) {
 
     fun maxCornerDistance(o: BoardQuad): Float = (0..3).maxOf { corners[it].dist(o.corners[it]) }
 
+    /**
+     * The same quad with its corners cyclically relabelled to best match [other]'s labelling
+     * (keeps board space, and therefore orientation, stable while the camera rotates).
+     */
+    fun alignedTo(other: BoardQuad): BoardQuad {
+        val s = (0..3).minBy { k -> (0..3).maxOf { corners[(it + k) % 4].dist(other.corners[it]) } }
+        return BoardQuad((0..3).map { corners[(it + s) % 4] })
+    }
+
     fun map(f: (Pt) -> Pt) = BoardQuad(corners.map(f))
 
     fun lerp(o: BoardQuad, t: Float) = BoardQuad((0..3).map { corners[it].lerp(o.corners[it], t) })
