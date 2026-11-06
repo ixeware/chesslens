@@ -2,6 +2,7 @@ package com.chesslens.vision
 
 import com.chesslens.chess.Board
 import com.chesslens.chess.Move
+import com.chesslens.chess.Square
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -146,5 +147,80 @@ class VisionTest {
         repeat(2) { det.process(warped(0.0, hand = true), board, 0) }
         val events = (0 until 8).mapNotNull { det.process(warped(18.0), board, 0).event }
         assertTrue("unexpected $events", events.none { it is VisionEvent.MoveDetected })
+    }
+
+    private fun playScreenGame(surface: BoardSurface, seq: List<String>, instantReplyAt: Int = -1): List<String> {
+        val pipeline = VisionPipeline()
+        pipeline.setSurface(surface)
+        val game = Board.startPosition()
+        var seed = 100
+        var highlight: Pair<Int, Int>? = null
+        val got = ArrayList<String>()
+        fun feed(img: Mat): VisionFrame {
+            val f = pipeline.process(img, game, autoOrientation = true)
+            img.release()
+            return f
+        }
+        repeat(10) { feed(SyntheticScreen.render(game, highlight, seed++, flicker = (seed % 3) * 2.0)) }
+        assertEquals(TrackingPhase.LOCKED, pipeline.phase)
+        var i = 0
+        while (i < seq.size) {
+            val pairUp = i == instantReplyAt
+            val moves = if (pairUp) listOf(seq[i], seq[i + 1]) else listOf(seq[i])
+            val after = game.copy()
+            val ms = moves.map { u -> after.parseUci(u)!!.also { after.makeMove(it) } }
+            val last = ms.last()
+            // One mid-animation frame, then the settled screen with the new highlight.
+            feed(SyntheticScreen.render(after, highlight, seed++, slide = Triple(com.chesslens.chess.Move.from(last), com.chesslens.chess.Move.to(last), 0.5f)))
+            highlight = com.chesslens.chess.Move.from(last) to com.chesslens.chess.Move.to(last)
+            var detected: List<Int>? = null
+            repeat(8) {
+                val e = feed(SyntheticScreen.render(after, highlight, seed++, flicker = (seed % 3) * 2.0)).event
+                if (e is VisionEvent.MoveDetected) detected = e.moves
+            }
+            val d = detected
+            if (d == null) {
+                got += "-"
+                return got
+            }
+            for (m in d) {
+                got += Move.uci(m)
+                game.makeMove(m)
+            }
+            i += moves.size
+        }
+        pipeline.release()
+        return got
+    }
+
+    @Test fun screenModeIgnoresMoveHighlights() {
+        val seq = listOf("e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "a7a6")
+        val got = playScreenGame(BoardSurface.SCREEN, seq)
+        println("screen mode: $got")
+        assertEquals(seq, got)
+    }
+
+    @Test fun screenModeReadsInstantReplies() {
+        val seq = listOf("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5")
+        // Black answers 2.Nf3 before the camera sees a still frame in between.
+        val got = playScreenGame(BoardSurface.SCREEN, seq, instantReplyAt = 2)
+        println("instant reply: $got")
+        assertEquals(seq, got)
+    }
+
+    @Test fun structureChangeIsHighlightInvariant() {
+        val b = Board.startPosition()
+        val plain = CvUtils.bytes(CvUtils.warpBoard(SyntheticScreen.render(b, null, 7), SyntheticScreen.grid, Cells.SIZE))
+        val lit = CvUtils.bytes(CvUtils.warpBoard(SyntheticScreen.render(b, Square.parse("e2") to Square.parse("g1"), 8), SyntheticScreen.grid, Cells.SIZE))
+        val structural = Cells.structureChange(lit, plain, 0.78f)
+        val raw = Cells.absDiff(lit, plain, 0.78f)
+        println("highlight: structural max=${"%.1f".format(structural.max())} brightness max=${"%.1f".format(raw.max())}")
+        assertTrue(structural.max() < 13.0)
+    }
+
+    @Test fun physicalModeOnScreenForComparison() {
+        org.junit.Assume.assumeTrue(System.getProperty("chesslens.debugDir") != null)
+        val seq = listOf("e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "a7a6")
+        println("physical mode on screen: ${playScreenGame(BoardSurface.PHYSICAL, seq)}")
     }
 }

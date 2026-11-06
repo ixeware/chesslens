@@ -130,7 +130,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     val events: SharedFlow<UiEvent> = _events
 
     /** Vision pipeline (thread-confined to the camera analyzer except for its request methods). */
-    val pipeline: VisionPipeline? by lazy { if (ChessLensApplication.openCvReady) VisionPipeline() else null }
+    val pipeline: VisionPipeline? by lazy {
+        if (ChessLensApplication.openCvReady) VisionPipeline().also { it.setSurface(_state.value.settings.surface) } else null
+    }
 
     /** Position the physical board is believed to show; read by the analyzer thread. */
     @Volatile
@@ -229,6 +231,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         store.save(new)
         autoOrientation = new.autoOrientation
         _state.update { it.copy(settings = new) }
+        if (old.surface != new.surface) pipeline?.setSurface(new.surface)
         if (old.multiPv != new.multiPv || old.thinkTimeMs != new.thinkTimeMs || old.overlayMode != new.overlayMode) analyzeCurrent()
     }
 
@@ -300,9 +303,13 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         when (val e = frame.event) {
             is VisionEvent.MoveDetected -> viewModelScope.launch(Dispatchers.Main) {
                 // Only accept if the app position hasn't changed meanwhile.
-                if (boardUsed === visionBoard && e.move in game.current.legalMoves()) {
+                if (boardUsed === visionBoard) {
                     if (!_state.value.isLive) refresh(viewPly = game.moves.size)
-                    playMove(e.move, fromCamera = true)
+                    // A move and an instant reply arrive together; play them in order.
+                    for (m in e.moves) {
+                        if (m !in game.current.legalMoves()) break
+                        playMove(m, fromCamera = true)
+                    }
                 }
             }
             is VisionEvent.Unrecognized -> viewModelScope.launch(Dispatchers.Main) {
@@ -411,7 +418,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         if (ply == game.moves.size - 1 && q in setOf(MoveQuality.BLUNDER, MoveQuality.MISTAKE, MoveQuality.BRILLIANT, MoveQuality.GREAT, MoveQuality.INACCURACY)) {
             val best = before.best?.move
             val bestSan = if (best != null && best != move) " · best was ${San.of(bd, best)}" else ""
-            banner("${game.moves[ply].san} ${q.symbol}  ${q.label}$bestSan", q)
+            val mark = if (q.symbol.isNotEmpty()) "${q.symbol} " else ""
+            banner("${game.moves[ply].san} $mark· ${q.label}$bestSan", q)
         }
     }
 

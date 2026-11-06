@@ -15,7 +15,7 @@ import kotlin.math.sin
  * Projects chess coordinates onto the camera preview. Chess space: x = 0..8 (a→h),
  * y = 0..8 (rank 1→8). Board space and orientation follow [BoardSpace].
  */
-class ArProjector(val viewQuad: List<Offset>, val orientation: Int) {
+class ArProjector(val viewQuad: List<Offset>, val orientation: Int, val flat: Boolean = false) {
     private val h = Homography.fromPoints(BoardQuad.BOARD_CORNERS, viewQuad.map { Pt(it.x, it.y) })
     private val inv = h.inverse()
 

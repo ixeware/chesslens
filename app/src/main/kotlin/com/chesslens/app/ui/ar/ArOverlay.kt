@@ -1,5 +1,15 @@
 package com.chesslens.app.ui.ar
 
+import android.graphics.Typeface
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.VectorPainter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.res.ResourcesCompat
+import com.chesslens.app.R
+import com.chesslens.app.ui.components.qualityIcon
+import com.chesslens.vision.BoardSurface
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -107,7 +117,13 @@ private class QuadSmoother {
 @Composable
 fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifier = Modifier) {
     val density = LocalDensity.current.density
-    val painter = remember(density) { Fx(density) }
+    val context = LocalContext.current
+    val painter = remember(density) {
+        val display = runCatching { ResourcesCompat.getFont(context, R.font.cal_sans) }.getOrNull() ?: Typeface.DEFAULT_BOLD
+        val body = runCatching { ResourcesCompat.getFont(context, R.font.inter_tight) }.getOrNull() ?: Typeface.DEFAULT
+        Fx(density, display, body)
+    }
+    val badgeIcons = MoveQuality.entries.mapNotNull { q -> qualityIcon(q)?.let { q to rememberVectorPainter(it) } }.toMap()
     val smoother = remember { QuadSmoother() }
     val frame = rememberFrameNanos()
     val model = remember(state.position, state.analysis, state.threat, state.settings) { OverlayModel.from(state) }
@@ -129,7 +145,7 @@ fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifi
             drawBrackets(painter, ArProjector(quad, vision.orientation), now, fx, alpha = 0.6f)
             return@Canvas
         }
-        val pj = ArProjector(quad, vision.orientation)
+        val pj = ArProjector(quad, vision.orientation, flat = state.settings.surface == BoardSurface.SCREEN)
         val hintAlpha = smoother.handAlpha
         val lost = vision.phase == TrackingPhase.LOST
 
@@ -198,7 +214,7 @@ fun ArOverlay(vision: VisionUi?, state: UiState, fx: OverlayFx, modifier: Modifi
             }
             painter.pill(this, a, l.title, l.sub, l.bg, l.fg, l.scale, l.alpha, titleSp = l.sp)
         }
-        fx.badge?.let { drawBadge(painter, pj, it, now) }
+        fx.badge?.let { drawBadge(painter, pj, it, now, badgeIcons) }
         vision.changedSquares.forEach { sq ->
             val a = 0.5f + 0.5f * sin(now / 1e9f * 6f)
             painter.stroke(this, pj.squarePath(sq, 0.06f), Lens.Red, painter.dp(2f), a, glow = painter.dp(6f))
@@ -228,7 +244,9 @@ private fun labelAnchor(pj: ArProjector, sq: Int, now: Long, lift: Float = 0.75f
     val c = pj.center(sq)
     val size = pj.squareSize(sq)
     val bob = sin(now / 1e9f * 2.4f + sq) * size * 0.04f
-    return Offset(c.x, c.y - size * lift + bob)
+    // Flat (2D) boards have no piece height to clear.
+    val k = if (pj.flat) 0.7f else 1f
+    return Offset(c.x, c.y - size * lift * k + bob)
 }
 
 private fun DrawScope.drawSearchGuide(p: Fx, now: Long) {
@@ -427,7 +445,7 @@ private fun DrawScope.drawHeat(p: Fx, pj: ArProjector, control: IntArray, alpha:
     }
 }
 
-private fun DrawScope.drawBadge(p: Fx, pj: ArProjector, b: BadgeFx, now: Long) {
+private fun DrawScope.drawBadge(p: Fx, pj: ArProjector, b: BadgeFx, now: Long, icons: Map<MoveQuality, VectorPainter>) {
     val t = (now - b.nanos) / 1e9f
     if (t < 0 || t > 3.2f) return
     val col = Color(b.quality.argb)
@@ -441,14 +459,15 @@ private fun DrawScope.drawBadge(p: Fx, pj: ArProjector, b: BadgeFx, now: Long) {
     p.circle(this, origin, r * 1.25f, col, 0.45f * fade, glow = p.dp(12f))
     p.circle(this, origin, r, col, fade)
     p.circle(this, origin, r, Color.White, 0.9f * fade, strokeWidth = p.dp(1.5f))
-    val label = when (b.quality) {
-        MoveQuality.BEST -> "★"
-        MoveQuality.EXCELLENT -> "!"
-        MoveQuality.GOOD -> "✓"
-        MoveQuality.BOOK -> "≡"
-        else -> b.quality.symbol
+    val icon = icons[b.quality]
+    if (icon != null) {
+        val s2 = r * 1.1f
+        translate(origin.x - s2 / 2, origin.y - s2 / 2) {
+            with(icon) { draw(androidx.compose.ui.geometry.Size(s2, s2), alpha = fade, colorFilter = ColorFilter.tint(Color.White)) }
+        }
+    } else {
+        p.text(this, b.quality.symbol, origin.x, origin.y + p.dp(5f) * scale, 14f * scale, Color.White, alpha = fade, center = true)
     }
-    p.text(this, label, origin.x, origin.y + p.dp(5f) * scale, 14f * scale, Color.White, alpha = fade, center = true)
     if (t > 0.2f) {
         p.pill(this, Offset(origin.x, origin.y - r - p.dp(2f)), b.quality.label, null, col, Color.White, popScale(t - 0.2f) * 0.8f, fade, pointer = false, titleSp = 11f)
     }

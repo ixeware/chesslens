@@ -25,7 +25,7 @@ fun ChessLensApp() {
     BackHandler(enabled = screen != Screen.HOME) { screen = Screen.HOME }
     AnimatedContent(screen, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "nav") { s ->
         when (s) {
-            Screen.HOME -> HomeScreen(onStartCamera = { screen = Screen.CAMERA }, onAnalysis = { screen = Screen.ANALYSIS })
+            Screen.HOME -> HomeScreen(vm, onStartCamera = { screen = Screen.CAMERA }, onAnalysis = { screen = Screen.ANALYSIS })
             Screen.CAMERA -> CameraScreen(vm, onExit = { screen = Screen.HOME }, onOpenAnalysis = { screen = Screen.ANALYSIS })
             Screen.ANALYSIS -> AnalysisScreen(vm, onBack = { screen = Screen.HOME }, onCamera = { screen = Screen.CAMERA })
         }

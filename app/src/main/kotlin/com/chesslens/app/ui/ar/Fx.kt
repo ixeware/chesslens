@@ -19,9 +19,13 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** Neon drawing helpers on the native canvas (blur mask glow, text, pills, particles). */
-class Fx(private val density: Float) {
+class Fx(
+    private val density: Float,
+    private val display: Typeface = Typeface.DEFAULT_BOLD,
+    private val body: Typeface = Typeface.DEFAULT,
+) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = display }
     private val blurs = HashMap<Int, BlurMaskFilter>()
     private val rect = RectF()
 
@@ -66,13 +70,13 @@ class Fx(private val density: Float) {
 
     fun textWidth(str: String, sizeSp: Float, bold: Boolean = true): Float {
         text.textSize = dp(sizeSp)
-        text.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        text.typeface = if (bold) display else body
         return text.measureText(str)
     }
 
     fun text(s: DrawScope, str: String, x: Float, baseline: Float, sizeSp: Float, color: Color, bold: Boolean = true, alpha: Float = 1f, center: Boolean = false) {
         text.textSize = dp(sizeSp)
-        text.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        text.typeface = if (bold) display else body
         text.color = color.copy(alpha = color.alpha * alpha).toArgb()
         text.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT
         s.drawContext.canvas.nativeCanvas.drawText(str, x, baseline, text)
@@ -134,12 +138,12 @@ class Fx(private val density: Float) {
         val baseline = top + h / 2 + dp(titleSp) * 0.36f
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(titleSp)
-        text.typeface = Typeface.DEFAULT_BOLD
+        text.typeface = display
         text.color = fg.copy(alpha = alpha).toArgb()
         c.drawText(title, -w / 2 + pad, baseline, text)
         if (sub != null) {
             text.textSize = dp(subSp)
-            text.typeface = Typeface.DEFAULT
+            text.typeface = body
             text.color = fg.copy(alpha = alpha * 0.72f).toArgb()
             c.drawText(sub, -w / 2 + pad + tw + gap, baseline, text)
         }

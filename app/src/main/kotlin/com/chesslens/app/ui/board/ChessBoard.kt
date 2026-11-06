@@ -26,6 +26,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
 import com.chesslens.app.ui.theme.Lens
+import com.chesslens.app.ui.theme.CalSans
+import com.chesslens.app.ui.components.qualityIcon
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import com.chesslens.chess.Move
 import com.chesslens.chess.MoveQuality
 import com.chesslens.chess.Square
@@ -63,6 +68,7 @@ fun ChessBoard(
         badgeAnim.snapTo(0f)
         if (badge != null) badgeAnim.animateTo(1f, tween(450))
     }
+    val badgeIcons = MoveQuality.entries.mapNotNull { q -> qualityIcon(q)?.let { q to rememberVectorPainter(it) } }.toMap()
     val targets = if (selected >= 0) legalMoves.filter { Move.from(it) == selected }.map { Move.to(it) }.toSet() else emptySet()
 
     val tapModifier = if (onMove != null) Modifier.pointerInput(flipped, legalMoves) {
@@ -126,15 +132,14 @@ fun ChessBoard(
             val r = cell * 0.24f * (if (k < 0.7f) k / 0.7f * 1.15f else 1.15f - (k - 0.7f) / 0.3f * 0.15f)
             drawCircle(Color(q.argb), r, c)
             drawCircle(Color.White, r, c, style = Stroke(cell * 0.03f))
-            val label = when (q) {
-                MoveQuality.BEST -> "★"
-                MoveQuality.EXCELLENT -> "!"
-                MoveQuality.GOOD -> "✓"
-                MoveQuality.BOOK -> "≡"
-                else -> q.symbol
+            val icon = badgeIcons[q]
+            if (icon != null) {
+                val s = r * 1.15f
+                translate(c.x - s / 2, c.y - s / 2) { with(icon) { draw(Size(s, s), colorFilter = ColorFilter.tint(Color.White)) } }
+            } else {
+                val layout = measurer.measure(q.symbol, TextStyle(color = Color.White, fontSize = (r * 1.1f / density.density).sp, fontFamily = CalSans))
+                drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f))
             }
-            val layout = measurer.measure(label, TextStyle(color = Color.White, fontSize = (r * 1.1f / density.density).sp, fontWeight = FontWeight.Bold))
-            drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f))
         }
     }
 }

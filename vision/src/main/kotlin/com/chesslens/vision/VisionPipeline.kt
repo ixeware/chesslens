@@ -38,6 +38,12 @@ class VisionPipeline {
     @Volatile private var orientationOverride: Int? = null
     @Volatile private var resyncRequest: MoveDetector.Resync? = null
     @Volatile private var relockRequested = false
+    @Volatile private var surfaceRequest: BoardSurface? = null
+
+    /** Current measurement model (physical board vs. a board on a screen). */
+    @Volatile
+    var surface: BoardSurface = BoardSurface.PHYSICAL
+        private set
 
     var phase = TrackingPhase.SEARCHING
         private set
@@ -59,6 +65,12 @@ class VisionPipeline {
 
     fun requestResync(afterMotion: Boolean) {
         resyncRequest = if (afterMotion) MoveDetector.Resync.AFTER_MOTION else MoveDetector.Resync.NOW
+    }
+
+    /** Switch between a physical board and a board shown on a screen. */
+    fun setSurface(s: BoardSurface) {
+        surface = s
+        surfaceRequest = s
     }
 
     fun relock() {
@@ -90,6 +102,10 @@ class VisionPipeline {
             manualQuad = null
             lock(q, gray, board, autoOrientation)
             lastScore = 1.0
+        }
+        surfaceRequest?.let {
+            surfaceRequest = null
+            moveDetector.setSurface(it)
         }
         resyncRequest?.let {
             moveDetector.requestResync(it)

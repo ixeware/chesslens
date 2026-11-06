@@ -14,6 +14,7 @@ import com.chesslens.chess.Game
 import com.chesslens.chess.MoveQuality
 import com.chesslens.chess.SearchLimits
 import com.chesslens.chess.Search
+import com.chesslens.vision.BoardSurface
 import com.chesslens.vision.TrackingPhase
 
 /** Canned positions for the home hero, the no-camera demo and screenshot tests. */
@@ -48,6 +49,7 @@ object DemoData {
         threat: EngineLine? = null,
         qualities: Map<Int, MoveQuality> = emptyMap(),
         heat: Boolean = false,
+        surface: BoardSurface = BoardSurface.PHYSICAL,
     ): UiState {
         val b = game.current
         return UiState(
@@ -61,7 +63,7 @@ object DemoData {
             evalByPly = List(game.moves.size + 1) { i -> listOf(20, 35, 28, 40, 31, 45, 38, 30, 34, 26, 40, 55, 30)[i % 13] * (if (i % 4 == 0) -1 else 1) },
             accuracyWhite = if (qualities.isNotEmpty()) 91.4 else null,
             accuracyBlack = if (qualities.isNotEmpty()) 84.7 else null,
-            settings = Settings(playAs = playAs, overlayMode = mode, showHeatmap = heat, voice = true),
+            settings = Settings(playAs = playAs, overlayMode = mode, showHeatmap = heat, voice = true, surface = surface),
         )
     }
 
@@ -69,10 +71,10 @@ object DemoData {
         VisionUi(quad, TrackingPhase.LOCKED, orientation, hand, 29f, 18, null)
 
     /** Home hero: Black to move after 5.Nc3, engine suggests 5...a6 with alternatives. */
-    fun heroState(mode: OverlayMode = OverlayMode.HINT): UiState {
-        val g = game(sicilian)
-        val info = info(g.current, listOf("a7a6 c1e3 e7e5 d4b3" to -26, "b8c6 c1g5 e7e6 d1d2" to -31, "g7g6 c1e3 f8g7 f2f3" to -38))
-        return state(g, info, mode)
+    fun heroState(mode: OverlayMode = OverlayMode.HINT, surface: BoardSurface = BoardSurface.PHYSICAL): UiState {
+        val g = game(listOf("e2e4", "e7e5", "g1f3"))
+        val info = info(g.current, listOf("b8c6 f1b5 a7a6" to -30, "g8f6 f3e5 d7d6" to -38, "d7d6 d2d4 e5d4" to -52))
+        return state(g, info, mode, surface = surface)
     }
 
     /** Quick sanity helper used by tests: real engine lines for a game. */

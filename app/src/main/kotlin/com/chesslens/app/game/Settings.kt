@@ -1,6 +1,7 @@
 package com.chesslens.app.game
 
 import android.content.Context
+import com.chesslens.vision.BoardSurface
 
 enum class PlayAs(val label: String) { WHITE("White"), BLACK("Black"), BOTH("Both sides") }
 
@@ -18,6 +19,8 @@ data class Settings(
     val showPv: Boolean = true,
     val cloudEval: Boolean = true,
     val autoOrientation: Boolean = true,
+    /** Real board in front of the camera (3D) or a board on a screen / printout (2D). */
+    val surface: BoardSurface = BoardSurface.PHYSICAL,
 ) {
     fun isMyTurn(side: Int): Boolean = when (playAs) {
         PlayAs.BOTH -> true
@@ -43,6 +46,7 @@ class SettingsStore(context: Context) {
             showPv = prefs.getBoolean("pv", d.showPv),
             cloudEval = prefs.getBoolean("cloud", d.cloudEval),
             autoOrientation = prefs.getBoolean("autoOrientation", d.autoOrientation),
+            surface = runCatching { BoardSurface.valueOf(prefs.getString("surface", d.surface.name)!!) }.getOrDefault(d.surface),
         )
     }
 
@@ -59,6 +63,7 @@ class SettingsStore(context: Context) {
             .putBoolean("pv", s.showPv)
             .putBoolean("cloud", s.cloudEval)
             .putBoolean("autoOrientation", s.autoOrientation)
+            .putString("surface", s.surface.name)
             .apply()
     }
 }

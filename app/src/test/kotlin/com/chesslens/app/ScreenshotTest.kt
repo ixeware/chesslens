@@ -21,7 +21,17 @@ import com.chesslens.app.ui.camera.CameraActions
 import com.chesslens.app.ui.camera.CameraScreenContent
 import com.chesslens.app.ui.camera.DemoBackdrop
 import com.chesslens.app.ui.home.DemoData
-import com.chesslens.app.ui.home.HomeScreen
+import com.chesslens.app.ui.home.HomeActions
+import com.chesslens.app.ui.home.HomeContent
+import com.chesslens.app.ui.camera.DemoScreenBackdrop
+import com.chesslens.app.ui.camera.SettingsContent
+import com.chesslens.vision.BoardSurface
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.Modifier
+import com.chesslens.app.ui.theme.Lens
 import com.chesslens.app.ui.theme.ChessLensTheme
 import com.chesslens.chess.EngineLine
 import com.chesslens.chess.Move
@@ -72,7 +82,8 @@ class ScreenshotTest {
             torch = false,
             actions = CameraActions(),
         ) {
-            DemoBackdrop(state.position.squares, orientation, onQuad = { quad = it })
+            if (state.settings.surface == BoardSurface.SCREEN) DemoScreenBackdrop(state.position.squares, orientation, onQuad = { quad = it })
+            else DemoBackdrop(state.position.squares, orientation, onQuad = { quad = it })
         }
     }
 
@@ -117,7 +128,7 @@ class ScreenshotTest {
     @Test
     @Config(qualifiers = "w400dp-h860dp-port-xhdpi")
     fun home() {
-        shoot("home", 2.5) { HomeScreen(onStartCamera = {}, onAnalysis = {}, animate = false) }
+        shoot("home", 2.5) { HomeContent(DemoData.heroState(), HomeActions(), animate = false) }
     }
 
     @Test
@@ -128,5 +139,35 @@ class ScreenshotTest {
         val q = mapOf(0 to MoveQuality.BOOK, 1 to MoveQuality.BOOK, 2 to MoveQuality.BOOK, 3 to MoveQuality.BOOK, 4 to MoveQuality.BEST, 5 to MoveQuality.GOOD, 6 to MoveQuality.INACCURACY, 7 to MoveQuality.BEST, 8 to MoveQuality.BEST, 9 to MoveQuality.MISTAKE, 10 to MoveQuality.BRILLIANT)
         val state = DemoData.state(g, info, OverlayMode.ANALYSIS, PlayAs.BOTH, qualities = q)
         shoot("analysis_board", 1.0) { AnalysisContent(state, AnalysisActions()) }
+    }
+
+    /** 2D mode: a chess site on a monitor; flat labels, same hints. */
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-land-xhdpi")
+    fun cameraScreen2d() {
+        val g = DemoData.game(listOf("e2e4", "c7c5", "g1f3", "d7d6", "d2d4"))
+        val info = DemoData.analysed(g, multiPv = 3, depth = 8)
+        val state = DemoData.state(g, info, OverlayMode.HINT, PlayAs.BLACK, surface = BoardSurface.SCREEN)
+        shoot("camera_screen_2d", 2.4) {
+            CameraScene(state, orientation = 0, fx = OverlayFx(), speaking = null)
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h860dp-port-xhdpi")
+    fun homeScreenTab() {
+        shoot("home_2d", 2.5) {
+            HomeContent(DemoData.heroState(surface = BoardSurface.SCREEN), HomeActions(), animate = false)
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h1500dp-port-xhdpi")
+    fun settings() {
+        shoot("settings", 0.5) {
+            Box(Modifier.fillMaxSize().background(Lens.Ground).statusBarsPadding()) {
+                SettingsContent(DemoData.heroState().settings, {})
+            }
+        }
     }
 }

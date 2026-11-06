@@ -82,13 +82,14 @@ object Tactics {
     }
 }
 
+/** Move quality; [symbol] is the chess annotation mark, empty for qualities that have none. */
 enum class MoveQuality(val symbol: String, val label: String, val argb: Long) {
     BRILLIANT("!!", "Brilliant", 0xFF1BC5C9),
     GREAT("!", "Great move", 0xFF5B8CFF),
-    BEST("★", "Best move", 0xFF6EE787),
-    EXCELLENT("👍", "Excellent", 0xFF8BD66B),
-    GOOD("✓", "Good", 0xFF9FC28A),
-    BOOK("📖", "Book", 0xFFC9A57B),
+    BEST("", "Best move", 0xFF6EE787),
+    EXCELLENT("", "Excellent", 0xFF8BD66B),
+    GOOD("", "Good", 0xFF9FC28A),
+    BOOK("", "Book", 0xFFC9A57B),
     INACCURACY("?!", "Inaccuracy", 0xFFF2C94C),
     MISTAKE("?", "Mistake", 0xFFF59E42),
     BLUNDER("??", "Blunder", 0xFFFF5A5A),

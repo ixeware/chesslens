@@ -8,9 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,7 +25,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.chesslens.app.ui.ar.ArProjector
-import com.chesslens.app.ui.components.GlassChip
+import com.chesslens.app.ui.components.BevelButton
+import com.chesslens.app.ui.components.GlowButton
+import com.chesslens.app.ui.components.HudPill
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material3.MaterialTheme
 import com.chesslens.app.ui.theme.Lens
 
 /** Drag the four corners onto the playing area (inner 8x8 grid) to lock the board manually. */
@@ -90,17 +92,14 @@ fun CornerEditor(initial: List<Offset>?, onDone: (List<Offset>) -> Unit, onCance
             }
         }
         Column(Modifier.align(Alignment.TopCenter).padding(top = 64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            GlassChip { Text("Drag the corners onto the 8×8 playing area", color = Color.White) }
+            HudPill { Text("Drag the corners onto the 8×8 playing area", style = MaterialTheme.typography.titleSmall, color = Lens.Text) }
         }
         Row(
             Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            OutlinedButton(onClick = onCancel) { Text("Cancel", color = Color.White) }
-            Button(
-                onClick = { onDone(corners.toList()) },
-                colors = ButtonDefaults.buttonColors(containerColor = Lens.Neon, contentColor = Lens.PillText),
-            ) { Text("Lock board") }
+            BevelButton(onClick = onCancel) { Text("Cancel", style = MaterialTheme.typography.labelLarge, color = Lens.Text) }
+            GlowButton("Lock board", Icons.Rounded.Lock, { onDone(corners.toList()) })
         }
     }
 }

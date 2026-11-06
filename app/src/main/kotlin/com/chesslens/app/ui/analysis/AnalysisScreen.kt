@@ -53,11 +53,14 @@ import com.chesslens.app.ui.ar.OverlayModel
 import com.chesslens.app.ui.board.BoardArrow
 import com.chesslens.app.ui.board.ChessBoard
 import com.chesslens.app.ui.camera.AccuracyRow
-import com.chesslens.app.ui.components.EngineChip
 import com.chesslens.app.ui.components.EvalBar
 import com.chesslens.app.ui.components.EvalGraph
 import com.chesslens.app.ui.components.QualityIcon
-import com.chesslens.app.ui.components.RoundIconButton
+import com.chesslens.app.ui.components.BevelIconButton
+import com.chesslens.app.ui.components.TopPill
+import com.chesslens.app.ui.components.forgeSlab
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.heightIn
 import com.chesslens.app.ui.theme.Lens
 import com.chesslens.chess.Board
 import com.chesslens.chess.EngineLine
@@ -124,16 +127,16 @@ fun AnalysisContent(state: UiState, actions: AnalysisActions) {
 @Composable
 private fun TopBar(state: UiState, onBack: () -> Unit, onFlip: () -> Unit, onCamera: () -> Unit) {
     val info = state.analysis?.takeIf { it.fen == state.position.fen }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val wide = maxWidth > 520.dp
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RoundIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
-            if (wide) Text("Analysis", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            EngineChip(info?.depth ?: 0, info?.let { OverlayModel.evalText(it, it.best) } ?: "", info?.source ?: "Local", state.searching)
-            RoundIconButton(Icons.Rounded.SwapVert, "Flip", onClick = onFlip)
-            RoundIconButton(Icons.Rounded.CameraAlt, "Camera", onClick = onCamera)
+    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BevelIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
+        Spacer(Modifier.weight(1f))
+        TopPill {
+            Text("Analysis", style = MaterialTheme.typography.titleLarge, color = Lens.Text)
+            if (info != null) Text(OverlayModel.evalText(info, info.best), style = MaterialTheme.typography.titleLarge, color = Lens.Green)
         }
+        Spacer(Modifier.weight(1f))
+        BevelIconButton(Icons.Rounded.SwapVert, "Flip board", onClick = onFlip)
+        BevelIconButton(Icons.Rounded.CameraAlt, "Camera", onClick = onCamera)
     }
 }
 
@@ -153,11 +156,14 @@ private fun BoardWithBar(state: UiState, flipped: Boolean, actions: AnalysisActi
     }
     val badgePly = state.viewPly - 1
     val badge = state.qualities[badgePly]?.let { q -> Move.to(state.moves[badgePly].move) to q }
-    Row(Modifier.width(size).height(size - 30.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        Modifier.width(size).height(size - 30.dp).forgeSlab(RoundedCornerShape(24.dp), elevation = 8.dp).padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         EvalBar(info?.whiteCp() ?: 0, info?.whiteMate(), flipped, Modifier)
         ChessBoard(
             squares = pos.squares,
-            modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)),
+            modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)),
             flipped = flipped,
             lastMove = pos.lastMove,
             arrows = arrows,
@@ -174,17 +180,17 @@ private fun BoardWithBar(state: UiState, flipped: Boolean, actions: AnalysisActi
 @Composable
 private fun NavRow(state: UiState, actions: AnalysisActions) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        RoundIconButton(Icons.Rounded.FirstPage, "Start") { actions.onGoTo(0) }
-        RoundIconButton(Icons.Rounded.ChevronLeft, "Back") { actions.onGoTo(state.viewPly - 1) }
+        BevelIconButton(Icons.Rounded.FirstPage, "First move") { actions.onGoTo(0) }
+        BevelIconButton(Icons.Rounded.ChevronLeft, "Previous move") { actions.onGoTo(state.viewPly - 1) }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             val label = if (state.viewPly == 0) "Start position" else {
                 val m = state.moves[state.viewPly - 1]
                 "${m.moveNumber}${if (m.color == Piece.WHITE) "." else "…"} ${m.san}"
             }
-            Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(label, style = MaterialTheme.typography.titleLarge, color = Lens.Text)
         }
-        RoundIconButton(Icons.Rounded.ChevronRight, "Forward") { actions.onGoTo(state.viewPly + 1) }
-        RoundIconButton(Icons.AutoMirrored.Rounded.LastPage, "End") { actions.onGoTo(state.moves.size) }
+        BevelIconButton(Icons.Rounded.ChevronRight, "Next move") { actions.onGoTo(state.viewPly + 1) }
+        BevelIconButton(Icons.AutoMirrored.Rounded.LastPage, "Last move") { actions.onGoTo(state.moves.size) }
     }
 }
 
@@ -193,28 +199,29 @@ private fun EngineLines(state: UiState) {
     val pos = state.position
     val info = state.analysis?.takeIf { it.fen == pos.fen } ?: return
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Lens.Surface).padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        Modifier.fillMaxWidth().forgeSlab(RoundedCornerShape(24.dp), elevation = 6.dp).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Text("Engine lines", style = MaterialTheme.typography.titleLarge, color = Lens.TextMuted)
         info.lines.take(state.settings.multiPv).forEachIndexed { i, line ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val text = OverlayModel.evalText(info, line)
                 val whiteAhead = info.whiteCp(line) >= 0
                 Box(
-                    Modifier.width(58.dp).clip(RoundedCornerShape(6.dp))
+                    Modifier.width(62.dp).heightIn(min = 32.dp).clip(RoundedCornerShape(10.dp))
                         .background(if (whiteAhead) Lens.EvalWhite else Lens.EvalBlack)
-                        .border(1.5.dp, Lens.LineColors[i], RoundedCornerShape(6.dp))
+                        .border(1.5.dp, Lens.LineColors[i], RoundedCornerShape(10.dp))
                         .padding(vertical = 4.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text(text, color = if (whiteAhead) Lens.EvalBlack else Lens.EvalWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-                Text(pvSan(pos.fen, line), color = Color.White, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                ) { Text(text, style = MaterialTheme.typography.labelLarge, color = if (whiteAhead) Lens.EvalBlack else Lens.EvalWhite) }
+                Text(pvSan(pos.fen, line), style = MaterialTheme.typography.bodyMedium, color = Lens.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
         state.threat?.let { t ->
             if (state.settings.showThreats) {
                 val nb = Board.fromFen(pos.fen).also { it.makeNullMove() }
                 if (nb.pieceAt(Move.from(t.move)) != 0) {
-                    Text("Threat: ${San.of(nb, t.move)}", color = Lens.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Threat: ${San.of(nb, t.move)}", style = MaterialTheme.typography.titleSmall, color = Lens.Red)
                 }
             }
         }
@@ -239,7 +246,7 @@ fun pvSan(fen: String, line: EngineLine, max: Int = 10): String {
 @Composable
 private fun MoveList(state: UiState, actions: AnalysisActions) {
     if (state.moves.isEmpty()) {
-        Text("Play moves on the board, or use the camera to record a game.", color = Lens.TextMuted, fontSize = 13.sp)
+        Text("Moves appear here as you play them on the board above or in front of the camera.", style = MaterialTheme.typography.bodyMedium, color = Lens.TextMuted)
         return
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -247,15 +254,17 @@ private fun MoveList(state: UiState, actions: AnalysisActions) {
             val selected = state.viewPly == i + 1
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (selected) Lens.Neon.copy(alpha = 0.25f) else Lens.Surface)
+                    .heightIn(min = 40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (selected) Lens.Green.copy(alpha = 0.18f) else Color(0xFF181818))
+                    .border(1.dp, if (selected) Lens.Green.copy(alpha = 0.55f) else Color(0xFF2C2C2C), RoundedCornerShape(12.dp))
                     .clickable { actions.onGoTo(i + 1) }
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                if (m.color == Piece.WHITE) Text("${m.moveNumber}.", color = Lens.TextMuted, fontSize = 12.sp)
-                Text(m.san, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                if (m.color == Piece.WHITE) Text("${m.moveNumber}.", style = MaterialTheme.typography.bodySmall, color = Lens.TextMuted)
+                Text(m.san, style = MaterialTheme.typography.titleSmall, color = Lens.Text)
                 state.qualities[i]?.let { QualityIcon(it, 15.dp) }
             }
         }
