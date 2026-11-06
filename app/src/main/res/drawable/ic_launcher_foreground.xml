@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Neon scan brackets -->
+    <path
+        android:strokeColor="#5BF08D"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M30,41 L30,30 L41,30 M67,30 L78,30 L78,41 M78,67 L78,78 L67,78 M41,78 L30,78 L30,67" />
+    <!-- Knight -->
+    <group
+        android:scaleX="0.62"
+        android:scaleY="0.62"
+        android:translateX="24.9"
+        android:translateY="22.4">
+        <path
+            android:fillType="evenOdd"
+            android:pathData="M28,86 L72,86 L72,80 L66,77 C70,68 72,58 69,48 C66,36 60,28 55,23 L54,16 L49,22 C44,22 38,26 33,32 L24,45 C22,48 23,52 27,53 L31,54 C34,52 38,50 43,49 C41,56 36,62 33,70 L36,77 L28,80 Z M47,33 A2.2,2.2 0 1,0 42.6,33 A2.2,2.2 0 1,0 47,33 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="30" android:startY="16"
+                    android:endX="70" android:endY="86">
+                    <item android:offset="0" android:color="#FFFFFFFF" />
+                    <item android:offset="1" android:color="#FFB9C9C0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>
