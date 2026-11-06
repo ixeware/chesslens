@@ -20,6 +20,18 @@ sealed interface VisionEvent {
 
     /** Reference image re-captured (after a manual correction / undo). */
     data object Resynced : VisionEvent
+
+    /** The changes look like a piece going [from] → [to], which isn't legal in this position. */
+    data class IllegalMove(val from: Int, val to: Int) : VisionEvent
+
+    /**
+     * A periodic check found the board showing the app position after undoing [undo] plies and
+     * playing [moves] (moves the detector missed or misread).
+     */
+    data class CaughtUp(val undo: Int, val moves: List<Int>) : VisionEvent
+
+    /** Board and app position disagree on [squares]; an empty list means they agree again. */
+    data class PositionMismatch(val squares: List<Int>) : VisionEvent
 }
 
 /** What the camera is looking at; tunes how square changes are measured. */
@@ -385,7 +397,7 @@ class MoveDetector(surface: BoardSurface = BoardSurface.PHYSICAL) {
             lastNote = "view shift ${"%.2f".format(shift)} unexplained=$unexplained"
             when {
                 event is VisionEvent.MoveDetected -> { setRef(warped); refFollows = true }
-                event is VisionEvent.Unrecognized -> refFollows = false // keep the pre-move picture
+                event is VisionEvent.Unrecognized || event is VisionEvent.IllegalMove -> refFollows = false // keep the pre-move picture
                 unexplained <= 1 -> { setRef(warped); refFollows = true }
                 unexplained > 6 && shift >= 0.2f -> { setRef(warped); refFollows = true } // the view changed
                 unexplained > 6 -> {
@@ -561,7 +573,43 @@ class MoveDetector(surface: BoardSurface = BoardSurface.PHYSICAL) {
             }
         }
         single?.let { return VisionEvent.MoveDetected(it.moves, confidence(it, singles)) }
-        return if (strong.isNotEmpty() && strong.size <= 6) VisionEvent.Unrecognized(strong) else null
+        if (strong.isEmpty() || strong.size > 6) return null
+        // Nothing legal fits: does a piece making a move it could physically make (path clear),
+        // that is only wrong because of whose turn it is or a king left in check, explain it?
+        // Anything else is a hand mid-move or a misread, not worth calling illegal.
+        val touched = (strong + weak).distinct()
+        val physical = HashSet<Int>()
+        val pseudo = IntArray(256)
+        for (flip in 0..1) {
+            val b = board.copy()
+            if (flip == 1) b.makeNullMove()
+            val n = b.generatePseudo(pseudo)
+            for (i in 0 until n) physical += (com.chesslens.chess.Move.from(pseudo[i]) shl 6) or com.chesslens.chess.Move.to(pseudo[i])
+        }
+        var illegal: Pair<Int, Int>? = null
+        var illegalScore = Double.NEGATIVE_INFINITY
+        for (from in touched) {
+            val p = before[from]
+            if (p == 0) continue
+            for (to in touched) {
+                if (to == from) continue
+                if ((from shl 6) or to !in physical) continue
+                val q = before[to]
+                if (q != 0 && Piece.color(q) == Piece.color(p)) continue
+                val after = before.copyOf()
+                after[to] = p
+                after[from] = 0
+                val (sc, minIn) = score(listOf(from, to), after)
+                // Clear changes on both squares and nothing else unexplained.
+                val others = strong.count { it != from && it != to && c[it] > barFor(it, before, after) }
+                if (others == 0 && minIn > threshold * 1.2 && sc > threshold * 0.8 && sc > illegalScore) {
+                    illegalScore = sc
+                    illegal = from to to
+                }
+            }
+        }
+        illegal?.let { return VisionEvent.IllegalMove(it.first, it.second) }
+        return VisionEvent.Unrecognized(strong)
     }
 
     private fun preferQueen(m: Int, s: Double): Double {

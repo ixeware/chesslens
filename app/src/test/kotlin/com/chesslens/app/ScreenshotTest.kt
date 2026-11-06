@@ -90,6 +90,19 @@ class ScreenshotTest {
         }
     }
 
+    /** The periodic check caught a missed move, and now finds the board differing on two squares. */
+    @Test
+    @Config(qualifiers = "w400dp-h860dp-port-xhdpi")
+    fun cameraMismatch() {
+        val g = DemoData.game(listOf("e2e4", "e7e5", "g1f3", "b8c6", "f1b5"))
+        val info = DemoData.analysed(g, multiPv = 1, depth = 8)
+        val state = DemoData.state(g, info, OverlayMode.HINT, PlayAs.BOTH).copy(
+            banner = com.chesslens.app.game.Banner("Caught up from the board: Bb5"),
+            mismatch = listOf(com.chesslens.chess.Square.parse("d7"), com.chesslens.chess.Square.parse("d6")),
+        )
+        shoot("camera_mismatch", 2.0) { CameraScene(state, orientation = 0, fx = OverlayFx(), speaking = null) }
+    }
+
     /** New game mid-way: the camera has read a middlegame; two squares to check, Black to move. */
     @Test
     @Config(qualifiers = "w400dp-h860dp-port-xhdpi")

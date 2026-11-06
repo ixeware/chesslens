@@ -17,17 +17,12 @@ import kotlin.math.max
 class FrameBuffers {
     internal var plane = ByteArray(0)
     internal var row = ByteArray(0)
-    internal var rowU = ByteArray(0)
-    internal var rowV = ByteArray(0)
-    internal var chroma = ByteArray(0)
     internal val raw = Mat()
-    internal val small = Mat()
 
     internal fun bytes(cur: ByteArray, n: Int): ByteArray = if (cur.size >= n) cur else ByteArray(n)
 
     fun release() {
         raw.release()
-        small.release()
     }
 }
 
@@ -71,65 +66,6 @@ object CvUtils {
         }
         if (buffers == null) raw.release()
         return rotate(scaled, rotationDegrees)
-    }
-
-    /**
-     * Skin mask (255 = skin-coloured) from the chroma planes of a YUV_420_888 frame, scaled and
-     * rotated exactly like [grayFromPlane] so it lines up with the grey image. Uses the classic
-     * YCbCr skin box (Cb 77–127, Cr 133–173).
-     */
-    fun skinFromChroma(
-        u: ByteBuffer,
-        v: ByteBuffer,
-        width: Int,
-        height: Int,
-        rowStride: Int,
-        pixelStride: Int,
-        rotationDegrees: Int,
-        maxSide: Int = 640,
-        buffers: FrameBuffers? = null,
-    ): Mat {
-        val cw = width / 2
-        val ch = height / 2
-        val out = buffers?.let { b -> b.bytes(b.chroma, cw * ch).also { b.chroma = it } } ?: ByteArray(cw * ch)
-        val rowU = buffers?.let { b -> b.bytes(b.rowU, rowStride).also { b.rowU = it } } ?: ByteArray(rowStride)
-        val rowV = buffers?.let { b -> b.bytes(b.rowV, rowStride).also { b.rowV = it } } ?: ByteArray(rowStride)
-        for (y in 0 until ch) {
-            u.position(y * rowStride)
-            v.position(y * rowStride)
-            val n = minOf(rowStride, u.remaining(), v.remaining())
-            u.get(rowU, 0, n)
-            v.get(rowV, 0, n)
-            for (x in 0 until cw) {
-                val i = x * pixelStride
-                if (i >= n) {
-                    out[y * cw + x] = 0
-                    continue
-                }
-                val cb = rowU[i].toInt() and 0xFF
-                val cr = rowV[i].toInt() and 0xFF
-                out[y * cw + x] = if (cb in 77..127 && cr in 133..173) 255.toByte() else 0
-            }
-        }
-        val small = buffers?.small ?: Mat()
-        small.create(ch, cw, CvType.CV_8UC1)
-        small.put(0, 0, out, 0, cw * ch)
-        val scale = maxSide.toDouble() / max(width, height)
-        val s = if (scale < 1.0) scale else 1.0
-        val sized = Mat()
-        Imgproc.resize(small, sized, Size(width * s, height * s), 0.0, 0.0, Imgproc.INTER_NEAREST)
-        if (buffers == null) small.release()
-        return rotate(sized, rotationDegrees)
-    }
-
-    /** Skin mask from an upright BGR image (tests and offline replays). */
-    fun skinFromBgr(bgr: Mat): Mat {
-        val ycrcb = Mat()
-        Imgproc.cvtColor(bgr, ycrcb, Imgproc.COLOR_BGR2YCrCb)
-        val mask = Mat()
-        org.opencv.core.Core.inRange(ycrcb, org.opencv.core.Scalar(0.0, 133.0, 77.0), org.opencv.core.Scalar(255.0, 173.0, 127.0), mask)
-        ycrcb.release()
-        return mask
     }
 
     fun rotate(src: Mat, degrees: Int): Mat {

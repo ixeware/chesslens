@@ -1,7 +1,11 @@
 package com.chesslens.app.ui.camera
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +21,7 @@ import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.TipsAndUpdates
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.Icon
@@ -27,6 +32,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.chesslens.app.game.OverlayMode
@@ -99,26 +106,42 @@ fun MoveCard(state: UiState, modifier: Modifier = Modifier, compact: Boolean = f
     }
 }
 
-/** Mini 2D board mirroring the live game, with tap-to-move for corrections. */
+/** Mini 2D board mirroring the live game; tap it to open the analysis board (and fix moves there). */
 @Composable
-fun MiniBoard(state: UiState, onMove: (Int, Int) -> Unit, modifier: Modifier = Modifier) {
+fun MiniBoard(state: UiState, onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val pos = state.position
     val info = state.analysis?.takeIf { it.fen == pos.fen }
     val analysis = state.settings.overlayMode == OverlayMode.ANALYSIS
     val showBest = state.settings.isMyTurn(pos.side) || analysis
     val arrows = if (showBest) info?.lines.orEmpty().take(if (analysis) state.settings.multiPv else 1)
         .mapIndexed { i, l -> BoardArrow(Move.from(l.move), Move.to(l.move), Lens.LineColors[i], if (i == 0) 0.2f else 0.13f) } else emptyList()
-    ChessBoard(
-        squares = pos.squares,
-        modifier = modifier.forgeWell(RoundedCornerShape(14.dp)).padding(4.dp).clip(RoundedCornerShape(10.dp)),
-        flipped = state.settings.playAs == PlayAs.BLACK,
-        lastMove = pos.lastMove,
-        arrows = arrows,
-        checkSquare = if (pos.inCheck) pos.kingSquare else -1,
-        legalMoves = pos.legalMoves,
-        showCoordinates = false,
-        onMove = onMove,
-    )
+    Box(
+        modifier
+            .forgeWell(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClickLabel = "Open analysis board", role = Role.Button, onClick = onOpen)
+            .padding(4.dp),
+    ) {
+        ChessBoard(
+            squares = pos.squares,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)),
+            flipped = state.settings.playAs == PlayAs.BLACK,
+            lastMove = pos.lastMove,
+            arrows = arrows,
+            checkSquare = if (pos.inCheck) pos.kingSquare else -1,
+            showCoordinates = false,
+        )
+        // Says the board opens something bigger.
+        Box(
+            Modifier.align(Alignment.TopEnd).padding(3.dp).size(20.dp).clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.OpenInFull, null, tint = Color.White, modifier = Modifier.size(13.dp))
+        }
+        if (state.mismatch != null) {
+            Box(Modifier.matchParentSize().clip(RoundedCornerShape(10.dp)).border(2.dp, Lens.Amber, RoundedCornerShape(10.dp)))
+        }
+    }
 }
 
 @Composable

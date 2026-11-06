@@ -26,7 +26,8 @@ class VideoReplay {
         File(out!!).mkdirs()
         val surface = System.getProperty("chesslens.surface")?.let { BoardSurface.valueOf(it) } ?: BoardSurface.PHYSICAL
         val pipeline = VisionPipeline().also { it.setSurface(surface) }
-        val board = Board.startPosition()
+        val board = System.getProperty("chesslens.startFen")?.let { Board.fromFen(it) } ?: Board.startPosition()
+        val dropAt = System.getProperty("chesslens.dropMoveAt")?.toInt()
         var frameNo = 0
         pipeline.debugEval = { cur, ref ->
             val both = Mat(Cells.SIZE, Cells.SIZE * 2, org.opencv.core.CvType.CV_8UC1)
@@ -47,20 +48,28 @@ class VideoReplay {
             val color = Imgcodecs.imread(f.absolutePath, Imgcodecs.IMREAD_COLOR)
             val gray = Mat()
             Imgproc.cvtColor(color, gray, Imgproc.COLOR_BGR2GRAY)
-            val skin = if (System.getProperty("chesslens.noSkin") == null) CvUtils.skinFromBgr(color) else null
-            val fr = pipeline.process(gray, board, autoOrientation = board.plyCount == 0, skin = skin)
-            skin?.release()
+            val fr = pipeline.process(gray, board, autoOrientation = board.plyCount == 0)
             color.release()
             totalMs += fr.processingMs
             maxMs = maxOf(maxMs, fr.processingMs)
+            if (System.getProperty("chesslens.logChecks") != null && pipeline.lastTimings.contains("check=") && i % 30 == 0) log.append("frame $i: ${pipeline.lastTimings.substringAfter("check=").substringBefore(" edge=")}\n")
             if (fr.processingMs > 150) log.append("frame $i: slow ${fr.processingMs}ms phase=${fr.phase} motion=${"%.1f".format(fr.motion)} hand=${fr.handOverBoard} ${pipeline.lastTimings}\n")
             if (fr.phase != lastPhase) log.append("frame $i: phase ${fr.phase} score=${"%.2f".format(fr.detectionScore)} orientation=${fr.orientation}\n")
             lastPhase = fr.phase
             when (val e = fr.event) {
                 is VisionEvent.MoveDetected -> {
                     log.append("frame $i: MOVE ${e.moves.map { Move.uci(it) }} conf=${"%.2f".format(e.confidence)} top=${top(fr.squareChanges)} | ${pipeline.lastTimings.substringBefore(" lk=")}\n")
+                    // Simulate a missed move to exercise the periodic check.
+                    if (dropAt != null && kotlin.math.abs(i - dropAt) < 15) log.append("   (dropped on purpose)\n")
+                    else e.moves.forEach { board.makeMove(it) }
+                }
+                is VisionEvent.CaughtUp -> {
+                    log.append("frame $i: CAUGHT UP undo=${e.undo} ${e.moves.map { Move.uci(it) }}\n")
+                    repeat(e.undo) { board.unmakeMove() }
                     e.moves.forEach { board.makeMove(it) }
                 }
+                is VisionEvent.PositionMismatch -> log.append("frame $i: MISMATCH ${e.squares.map { com.chesslens.chess.Square.name(it) }} | ${pipeline.lastTimings.substringBefore(" lk=")}\n")
+                is VisionEvent.IllegalMove -> log.append("frame $i: ILLEGAL ${com.chesslens.chess.Square.name(e.from)}-${com.chesslens.chess.Square.name(e.to)}\n")
                 is VisionEvent.Unrecognized -> log.append("frame $i: UNRECOGNIZED ${e.squares.map { com.chesslens.chess.Square.name(it) }} top=${top(fr.squareChanges)} | ${pipeline.lastTimings.substringBefore(" lk=")}\n")
                 is VisionEvent.Resynced -> log.append("frame $i: resynced\n")
                 null -> {

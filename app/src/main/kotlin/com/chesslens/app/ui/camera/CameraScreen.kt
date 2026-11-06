@@ -39,6 +39,8 @@ import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FlashOff
 import androidx.compose.material.icons.rounded.FlashOn
@@ -116,6 +118,9 @@ data class CameraActions(
     val onCorners: (List<Offset>) -> Unit = {},
     val onOpenAnalysis: () -> Unit = {},
     val onCopyPgn: () -> Unit = {},
+    /** Board and app disagree: scan the board to fix the position. */
+    val onFixPosition: () -> Unit = {},
+    val onEditPosition: () -> Unit = {},
 )
 
 @Composable
@@ -163,6 +168,8 @@ fun CameraScreen(vm: GameViewModel, onExit: () -> Unit, onOpenAnalysis: () -> Un
         onResync = vm::resync,
         onCorners = vm::setManualCorners,
         onOpenAnalysis = onOpenAnalysis,
+        onFixPosition = vm::startSetup,
+        onEditPosition = vm::startEdit,
         onCopyPgn = {
             context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("PGN", vm.pgn()))
             Toast.makeText(context, "PGN copied", Toast.LENGTH_SHORT).show()
@@ -277,6 +284,7 @@ fun CameraScreenContent(
                         showMenu = false
                         when (item) {
                             MenuItem.NEW -> actions.onNewGame()
+                            MenuItem.EDIT -> actions.onEditPosition()
                             MenuItem.FEN -> showFen = true
                             MenuItem.CORNERS -> calibrating = true
                             MenuItem.RELOCK -> actions.onRelock()
@@ -291,6 +299,17 @@ fun CameraScreenContent(
                 )
             }
         }
+    }
+}
+
+/** The board shows something else than the app: one tap rescans it. */
+@Composable
+private fun MismatchPill(squares: List<Int>, onFix: () -> Unit) {
+    val names = squares.take(4).joinToString(" ") { com.chesslens.chess.Square.name(it) }
+    BevelButton(onClick = onFix, description = "Board and app differ on $names. Fix the position") {
+        Icon(Icons.Rounded.Warning, null, tint = Lens.Amber, modifier = Modifier.size(18.dp))
+        Text("Board differs ($names)", style = MaterialTheme.typography.labelMedium, color = Lens.Text, maxLines = 1)
+        Text("Fix", style = MaterialTheme.typography.labelMedium, color = Lens.Amber)
     }
 }
 
@@ -332,10 +351,14 @@ private fun Hud(
         Column(Modifier.align(Alignment.TopEnd).padding(top = 60.dp), horizontalAlignment = Alignment.End) {
             EngineChip(info?.depth ?: 0, info?.let { OverlayModel.evalText(it, it.best) } ?: "", info?.source ?: "Local", state.searching)
         }
-        BannerToast(
-            state.banner?.text, state.banner?.quality, state.banner?.error == true,
+        Column(
             Modifier.align(Alignment.TopCenter).padding(top = 112.dp),
-        )
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BannerToast(state.banner?.text, state.banner?.quality, state.banner?.error == true)
+            if (state.mismatch != null && !settingUp) MismatchPill(state.mismatch, actions.onFixPosition)
+        }
         // 3D board / 2D screen quick toggle.
         BevelButton(
             onClick = { actions.onSettings { it.copy(surface = if (screen) BoardSurface.PHYSICAL else BoardSurface.SCREEN) } },
@@ -380,7 +403,7 @@ private fun SidePanel(state: UiState, actions: CameraActions, onSettings: () -> 
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MiniBoard(state, actions.onMove, Modifier.weight(1f).fillMaxHeight().wrapContentWidth().aspectRatio(1f, matchHeightConstraintsFirst = true))
+            MiniBoard(state, actions.onOpenAnalysis, Modifier.weight(1f).fillMaxHeight().wrapContentWidth().aspectRatio(1f, matchHeightConstraintsFirst = true))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 BevelIconButton(Icons.Rounded.Settings, "Settings", onClick = onSettings)
                 BevelIconButton(Icons.Rounded.Insights, "Analysis board", onClick = actions.onOpenAnalysis)
@@ -411,7 +434,7 @@ private fun BottomPanel(state: UiState, actions: CameraActions, onSettings: () -
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniBoard(state, actions.onMove, Modifier.size(124.dp))
+                MiniBoard(state, actions.onOpenAnalysis, Modifier.size(124.dp))
             }
             MoveCard(state, Modifier.weight(1f), compact = true)
         }
@@ -430,8 +453,9 @@ private fun BottomPanel(state: UiState, actions: CameraActions, onSettings: () -
 }
 
 private enum class MenuItem(val label: String, val icon: ImageVector) {
-    NEW("New game", Icons.Rounded.RestartAlt),
-    FEN("Set position from FEN", Icons.Rounded.Edit),
+    NEW("New game (scan the board)", Icons.Rounded.RestartAlt),
+    EDIT("Edit position", Icons.Rounded.Edit),
+    FEN("Set position from FEN", Icons.Rounded.ContentPaste),
     CORNERS("Adjust board corners", Icons.Rounded.CenterFocusStrong),
     RELOCK("Find the board again", Icons.Rounded.Refresh),
     ROTATE("Rotate board 90°", Icons.Rounded.ScreenRotation),

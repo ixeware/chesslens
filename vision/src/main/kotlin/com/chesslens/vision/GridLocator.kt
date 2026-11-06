@@ -41,6 +41,8 @@ class GridLocator(private val workSize: Int = 400) {
      * @param expected pieces (a1 = 0) the board should show: picks the window and orientation
      *   whose occupancy and piece colours match best (used when locking)
      */
+    var debugWindows = ""
+
     /** Per-stage timings of the last call (debugging). */
     var lastTimings = ""
         private set
@@ -73,7 +75,7 @@ class GridLocator(private val workSize: Int = 400) {
             small.release()
             return null
         }
-        val placed0 = placeWindow(lattice, small, px, w, h, response, priorSmall, expected)
+        val placed0 = placeWindow(lattice, small, px, w, h, response, priorSmall, expected, refined)
         small.release()
         placed0 ?: return null
         val t4 = System.nanoTime()
@@ -379,29 +381,56 @@ class GridLocator(private val workSize: Int = 400) {
      */
     private fun placeWindow(
         l: Lattice, small: Mat, px: ByteArray, w: Int, h: Int, resp: FloatArray,
-        prior: BoardQuad?, expected: IntArray?,
+        prior: BoardQuad?, expected: IntArray?, allPts: List<Pt> = emptyList(),
     ): Placed? {
         val imin = l.coords.minOf { it[0] }
         val imax = l.coords.maxOf { it[0] }
         val jmin = l.coords.minOf { it[1] }
         val jmax = l.coords.maxOf { it[1] }
         fun range(lo: Int, hi: Int): IntRange = if (hi - 7 <= lo - 1) (hi - 7)..(lo - 1) else (lo - 1)..(hi - 7)
-        val candidates = ArrayList<Pair<BoardQuad, Double>>()
-        for (oi in range(imin, imax)) for (oj in range(jmin, jmax)) {
+        fun windowQuad(oi: Int, oj: Int): BoardQuad? {
             val corners = listOf(
                 l.h.map(oi.toFloat(), oj.toFloat()), l.h.map(oi + 8f, oj.toFloat()),
                 l.h.map(oi + 8f, oj + 8f), l.h.map(oi.toFloat(), oj + 8f),
             )
-            val quad = BoardQuad.ordered(corners)
-            if (!quad.isConvex()) continue
-            candidates += quad to windowScore(l.h, oi, oj, px, w, h, resp)
+            return BoardQuad.ordered(corners).takeIf { it.isConvex() }
         }
-        if (candidates.isEmpty()) return null
+        class Cand(val quad: BoardQuad, val score: Double, val oi: Int, val oj: Int)
+        val cands = ArrayList<Cand>()
+        for (oi in range(imin, imax)) for (oj in range(jmin, jmax)) {
+            val quad = windowQuad(oi, oj) ?: continue
+            cands += Cand(quad, windowScore(l.h, oi, oj, px, w, h, resp), oi, oj)
+        }
+        if (cands.isEmpty()) return null
+        val candidates = cands.map { it.quad to it.score }
         if (prior != null) {
-            // While tracking, stay on the lattice block nearest to the previous lock.
-            val near = candidates.minBy { it.first.alignedTo(prior).maxCornerDistance(prior) }
-            val aligned = near.first.alignedTo(prior)
-            if (aligned.maxCornerDistance(prior) < sqrt(prior.area()) * 0.15f) return Placed(aligned, near.second, null)
+            // While tracking, stay on the lattice block nearest to the previous lock...
+            val near = cands.minBy { it.quad.alignedTo(prior).maxCornerDistance(prior) }
+            val aligned = near.quad.alignedTo(prior)
+            if (aligned.maxCornerDistance(prior) < sqrt(prior.area()) * 0.15f) {
+                // ...unless a block one square over explains the picture clearly better: tracking
+                // that drifted by more than half a square would otherwise lock one square off.
+                // Detected X-corners on each block's 49 interior points: a block one square off has
+                // a whole row of them on the board's edge, where there are none.
+                val nearHits = interiorHits(l.h, near.oi, near.oj, allPts)
+                var best = aligned
+                var bestScore = near.score
+                var bestHits = nearHits
+                debugWindows = "near hits=$nearHits n=${l.coords.size}"
+                for (di in -1..1) for (dj in -1..1) {
+                    if (di == 0 && dj == 0) continue
+                    val q = windowQuad(near.oi + di, near.oj + dj) ?: continue
+                    val hits = interiorHits(l.h, near.oi + di, near.oj + dj, allPts)
+                    debugWindows += " [$di,$dj hits=$hits]"
+                    if (hits < bestHits + WINDOW_SWITCH_HITS) continue
+                    // Pieces must agree too when the position is known.
+                    if (expected != null && occupancyFit(small, q, expected).second < occupancyFit(small, best, expected).second) continue
+                    best = q.alignedTo(prior)
+                    bestScore = windowScore(l.h, near.oi + di, near.oj + dj, px, w, h, resp)
+                    bestHits = hits
+                }
+                return Placed(best, bestScore, null)
+            }
         }
         if (expected != null) {
             var best: Placed? = null
@@ -418,6 +447,19 @@ class GridLocator(private val workSize: Int = 400) {
         }
         val best = candidates.maxBy { it.second }
         return Placed(best.first, best.second, null)
+    }
+
+    /** Number of the 7x7 interior points of block ([oi], [oj]) with a detected corner nearby. */
+    private fun interiorHits(hm: Homography, oi: Int, oj: Int, pts: List<Pt>): Int {
+        if (pts.isEmpty()) return 0
+        val cell = hm.map(oi + 4f, oj + 4f).dist(hm.map(oi + 5f, oj + 4f))
+        val tol = cell * 0.2f
+        var hits = 0
+        for (a in 1..7) for (b in 1..7) {
+            val p = hm.map((oi + a).toFloat(), (oj + b).toFloat())
+            if (pts.any { abs(it.x - p.x) < tol && abs(it.y - p.y) < tol }) hits++
+        }
+        return hits
     }
 
     /**
@@ -523,19 +565,21 @@ class GridLocator(private val workSize: Int = 400) {
             for (k in 0..7) {
                 val (a, b) = when (side) { 0 -> -1 to k; 1 -> 8 to k; 2 -> k to -1; else -> k to 8 }
                 if (!valid(a, b)) continue
-                val (ia, ib) = when (side) { 0 -> 0 to k; 1 -> 7 to k; 2 -> k to 0; else -> k to 7 }
-                if (!valid(ia, ib)) continue
                 val parity = if (((a + b) % 2 + 2) % 2 == 0) pol else -pol
-                alt += parity * (m(a, b) - m(ia, ib))
+                // Correlation of the ring with the checker pattern continued outward: real squares
+                // score high, a plain border (light or dark) scores ~0.
+                alt += parity * m(a, b)
                 tex += std[b + 1][a + 1]
                 n++
             }
-            if (n >= 3) penalty += max(0.0, alt / n) / 80.0 + (tex / n) / 60.0
+            if (n >= 3) penalty += max(0.0, alt / n) / 40.0 + (tex / n) / 60.0
         }
         return corner / 49.0 * 3.0 + checker - penalty * 0.5 + seen / 49.0 * 0.2
     }
 
     companion object {
+        /** How many more interior corners a neighbouring 8x8 block needs to move the lock by a square. */
+        private const val WINDOW_SWITCH_HITS = 4
         private const val RADIUS = 5
         private const val MAX_POINTS = 260
     }

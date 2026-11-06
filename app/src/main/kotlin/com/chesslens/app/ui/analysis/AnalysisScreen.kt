@@ -62,6 +62,11 @@ import com.chesslens.app.ui.components.forgeSlab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.heightIn
 import com.chesslens.app.ui.theme.Lens
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import com.chesslens.app.ui.camera.SetupActions
+import com.chesslens.app.ui.camera.SetupPanel
 import com.chesslens.chess.Board
 import com.chesslens.chess.EngineLine
 import com.chesslens.chess.Move
@@ -73,16 +78,36 @@ data class AnalysisActions(
     val onCamera: () -> Unit = {},
     val onGoTo: (Int) -> Unit = {},
     val onMove: (Int, Int) -> Unit = { _, _ -> },
+    /** Correct the position piece by piece. */
+    val onEdit: () -> Unit = {},
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalysisScreen(vm: GameViewModel, onBack: () -> Unit, onCamera: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val setup by vm.setup.collectAsStateWithLifecycle()
     DisposableEffect(Unit) {
         vm.setDeepAnalysis(true)
         onDispose { vm.setDeepAnalysis(false) }
     }
-    AnalysisContent(state, AnalysisActions(onBack, onCamera, vm::goToPly, vm::playFromTo))
+    AnalysisContent(state, AnalysisActions(onBack, onCamera, vm::goToPly, vm::playFromTo, vm::startEdit))
+    val s = setup
+    if (s != null) {
+        // The camera isn't running here: edit by hand only.
+        ModalBottomSheet(onDismissRequest = vm::setupCancel, containerColor = Lens.Slab) {
+            SetupPanel(
+                s,
+                SetupActions(
+                    onSelect = vm::setupSelect, onPlace = vm::setupPlace, onSide = vm::setupSide,
+                    onRescan = {}, onStandard = vm::setupStandard, onCancel = vm::setupCancel, onStart = vm::setupConfirm,
+                ),
+                landscape = false,
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
+                canScan = false,
+            )
+        }
+    }
 }
 
 @Composable
@@ -94,7 +119,7 @@ fun AnalysisContent(state: UiState, actions: AnalysisActions) {
         val boxH = maxHeight
         val boardBlock: @Composable (Dp) -> Unit = { size -> BoardWithBar(state, flipped, actions, size) }
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            TopBar(state, onBack = actions.onBack, onFlip = { flipped = !flipped }, onCamera = actions.onCamera)
+            TopBar(state, onBack = actions.onBack, onFlip = { flipped = !flipped }, onCamera = actions.onCamera, onEdit = actions.onEdit)
             if (landscape) {
                 Row(Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     boardBlock(boxH - 90.dp)
@@ -125,7 +150,7 @@ fun AnalysisContent(state: UiState, actions: AnalysisActions) {
 }
 
 @Composable
-private fun TopBar(state: UiState, onBack: () -> Unit, onFlip: () -> Unit, onCamera: () -> Unit) {
+private fun TopBar(state: UiState, onBack: () -> Unit, onFlip: () -> Unit, onCamera: () -> Unit, onEdit: () -> Unit) {
     val info = state.analysis?.takeIf { it.fen == state.position.fen }
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         BevelIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
@@ -135,6 +160,7 @@ private fun TopBar(state: UiState, onBack: () -> Unit, onFlip: () -> Unit, onCam
             if (info != null) Text(OverlayModel.evalText(info, info.best), style = MaterialTheme.typography.titleLarge, color = Lens.Green)
         }
         Spacer(Modifier.weight(1f))
+        BevelIconButton(Icons.Rounded.Edit, "Edit position", onClick = onEdit)
         BevelIconButton(Icons.Rounded.SwapVert, "Flip board", onClick = onFlip)
         BevelIconButton(Icons.Rounded.CameraAlt, "Camera", onClick = onCamera)
     }

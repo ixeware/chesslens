@@ -72,6 +72,9 @@ class VisionPipeline {
     private var snapFailures = 0
 
     private var trackMs = 0L
+    /** Times the grid was corrected by most of a square while tracking (debugging). */
+    var gridJumps = 0
+        private set
     private var lastSnap = 0f
 
     /** Per-stage timings of the last frame (debugging). */
@@ -126,11 +129,7 @@ class VisionPipeline {
      * @param board the position the board currently shows
      * @param autoOrientation work out which side White sits on from the pieces when locking
      */
-    /**
-     * @param skin optional skin mask aligned with [gray] (see [CvUtils.skinFromChroma]): a hand
-     *   over or at the edge of the board blocks move reading even when it holds still
-     */
-    fun process(gray: Mat, board: Board, autoOrientation: Boolean, skin: Mat? = null): VisionFrame {
+    fun process(gray: Mat, board: Board, autoOrientation: Boolean): VisionFrame {
         val t0 = System.nanoTime()
         frameIndex++
         orientationOverride?.let {
@@ -165,22 +164,28 @@ class VisionPipeline {
         val t1 = System.nanoTime()
         when (phase) {
             TrackingPhase.SEARCHING, TrackingPhase.LOST -> search(gray, board, autoOrientation)
-            TrackingPhase.LOCKED -> track(gray)
+            TrackingPhase.LOCKED -> track(gray, board)
         }
         val t2 = System.nanoTime()
 
         val quad = tracker.quad
         var out = MoveDetector.Output(0.0, false)
+        var checkEvent: VisionEvent? = null
         var scan: BoardScan? = null
         var scanProgress: Float? = null
         var steep = 1f
-        val hand = phase == TrackingPhase.LOCKED && quad != null && skin != null && handVisible(skin, quad)
+        // An arm crossing the board's edge holds back move reads even while it is still.
+        val hand = phase == TrackingPhase.LOCKED && quad != null &&
+            edgeWatch.update(gray, quad, still = lastMotion <= moveDetector.tuning.motionThreshold)
         if (phase == TrackingPhase.LOCKED && quad != null) {
             CvUtils.warpBoard(gray, quad, Cells.SIZE, warpMat)
             // Screens add moiré and pixel-grid texture: smooth it before comparing structure.
             if (surface == BoardSurface.SCREEN) org.opencv.imgproc.Imgproc.GaussianBlur(warpMat, warpMat, org.opencv.core.Size(3.0, 3.0), 0.0)
             val px = CvUtils.bytes(warpMat)
             out = moveDetector.process(px, board, orientation, cameraDirection(quad, gray.rows()), visibility(quad, gray.cols(), gray.rows()), quad, hand)
+            lastMotion = out.motion
+            if (out.event is VisionEvent.MoveDetected || out.event is VisionEvent.Resynced) edgeWatch.rebase()
+            checkEvent = checkPosition(px, quad, board, gray, hand, out)
             val cam = if (surface == BoardSurface.SCREEN) Pt(0f, 0f) else BoardScanner.cameraDir(quad, gray.rows())
             steep = if (surface == BoardSurface.SCREEN) 1f else BoardScanner.steepness(quad, cam)
             if (scanRequested) {
@@ -192,7 +197,7 @@ class VisionPipeline {
             scanProgress = 0f
         }
         val t3 = System.nanoTime()
-        lastTimings = "${moveDetector.lastNote} skin=${"%.3f".format(lastSkin)}/${"%.3f".format(skinBaseline)} snap=${"%.1f".format(lastSnap)} lk=$trackMs pre=${(t1 - t0) / 1000000} locate/track=${(t2 - t1) / 1000000} moves=${(t3 - t2) / 1000000} grid[${grid.lastTimings}]"
+        lastTimings = "${moveDetector.lastNote} check=$lastCheck edge=${"%.3f".format(edgeWatch.lastFraction)} snap=${"%.1f".format(lastSnap)} lk=$trackMs pre=${(t1 - t0) / 1000000} locate/track=${(t2 - t1) / 1000000} moves=${(t3 - t2) / 1000000} grid[${grid.lastTimings}]"
         return VisionFrame(
             imageWidth = gray.cols(),
             imageHeight = gray.rows(),
@@ -201,7 +206,7 @@ class VisionPipeline {
             orientation = orientation,
             handOverBoard = out.handOverBoard,
             motion = out.motion.toFloat(),
-            event = out.event,
+            event = out.event ?: checkEvent,
             detectionScore = lastScore,
             processingMs = (System.nanoTime() - t0) / 1_000_000,
             squareChanges = out.squareChanges,
@@ -209,6 +214,51 @@ class VisionPipeline {
             scanProgress = scanProgress,
             steepness = steep,
         )
+    }
+
+    /** Periodic board-vs-app check (see [PositionCheck]); off while the app sets up a position. */
+    @Volatile
+    var positionChecks = true
+
+    private val positionCheck = PositionCheck()
+    private var lastCheckFrame = 0L
+    private var checkedBoard: Board? = null
+    private var mismatchReported = false
+
+    /** Last periodic check verdict (debugging). */
+    var lastCheck: String = ""
+        private set
+
+    private fun checkPosition(px: ByteArray, quad: BoardQuad, board: Board, gray: Mat, hand: Boolean, out: MoveDetector.Output): VisionEvent? {
+        if (board !== checkedBoard) {
+            // The app position changed (a move, undo, new game): judge it afresh.
+            checkedBoard = board
+            positionCheck.reset()
+            mismatchReported = false
+        }
+        if (!positionChecks || out.event != null || hand || !moveDetector.isIdle) return null
+        if (frameIndex - lastCheckFrame < CHECK_INTERVAL) return null
+        lastCheckFrame = frameIndex
+        val cam = if (surface == BoardSurface.SCREEN) Pt(0f, 0f) else BoardScanner.cameraDir(quad, gray.rows())
+        val steep = if (surface == BoardSurface.SCREEN) 1f else BoardScanner.steepness(quad, cam)
+        val scan = scanner.scan(px, orientation, cam, visibleCells(quad, gray.cols(), gray.rows()), steep)
+        return when (val v = positionCheck.update(scan, orientation, board)) {
+            is PositionCheck.Verdict.Explained -> {
+                lastCheck = "caught up undo=${v.undo} ${v.moves.map { com.chesslens.chess.Move.uci(it) }}"
+                // This still frame shows the caught-up position: compare the next move against it.
+                moveDetector.setReference(px)
+                VisionEvent.CaughtUp(v.undo, v.moves)
+            }
+            is PositionCheck.Verdict.Mismatch -> {
+                lastCheck = "mismatch ${v.squares.map { com.chesslens.chess.Square.name(it) }}"
+                if (mismatchReported) null else { mismatchReported = true; VisionEvent.PositionMismatch(v.squares) }
+            }
+            PositionCheck.Verdict.Ok -> {
+                lastCheck = "ok ${positionCheck.debug}"
+                if (mismatchReported) { mismatchReported = false; VisionEvent.PositionMismatch(emptyList()) } else null
+            }
+            PositionCheck.Verdict.Unsure -> { lastCheck = "unsure ${positionCheck.debug}"; null }
+        }
     }
 
     /** Averages still frames of the rectified board; scans once enough are in. */
@@ -264,20 +314,26 @@ class VisionPipeline {
         if (wasLost) moveDetector.requestResync(MoveDetector.Resync.NOW)
     }
 
-    private fun track(gray: Mat) {
+    private fun track(gray: Mat, board: Board) {
         val tt = System.nanoTime()
         val tracked = tracker.update(gray) ?: return
         trackMs = (System.nanoTime() - tt) / 1000000
         val diag = sqrt(tracked.area())
         // Re-anchor on the lattice often, and on every frame the move detector will compare.
         if (moveDetector.wantsPreciseFrame || frameIndex % 3 == 0L) {
-            val r = grid.locate(gray, prior = tracked)
+            val r = grid.locate(gray, prior = tracked, expected = board.squares)
             val snapped = r?.quad?.alignedTo(tracked)
             if (snapped != null && snapped.maxCornerDistance(tracked) < diag * 0.15f) {
                 // Sub-pixel differences are noise; re-anchoring on them would make the picture shimmer.
                 val d = snapped.maxCornerDistance(tracked)
                 lastSnap = d
                 if (d > 0.75f) tracker.correct(if (d < 4f) tracked.lerp(snapped, 0.25f) else snapped)
+                // Moved by most of a square: the grid had slipped. Pictures taken with the old grid
+                // no longer line up with new ones, so the move detector starts from a fresh one.
+                if (d > diag / 8f * 0.5f) {
+                    gridJumps++
+                    moveDetector.requestResync(MoveDetector.Resync.NOW)
+                }
                 lastLock = snapped
                 lastScore = r.score
                 snapFailures = 0
@@ -292,7 +348,7 @@ class VisionPipeline {
     }
 
     private fun lock(q: BoardQuad, gray: Mat, autoOrientation: Boolean, locatorOrientation: Int?) {
-        skinBaseline = -1.0
+        edgeWatch.reset()
         tracker.reset(q, gray)
         moveDetector.reset()
         lastLock = q
@@ -316,24 +372,8 @@ class VisionPipeline {
         }
     }
 
-    private val skinWarp = Mat()
-    private var skinBaseline = -1.0
-
-    /**
-     * Skin-coloured area over the board and a margin around it, compared with what the board
-     * itself shows when no hand is around (wooden boards are skin-coloured too).
-     */
-    private fun handVisible(skin: Mat, quad: BoardQuad): Boolean {
-        CvUtils.warpBoard(skin, quad.inset(-0.08f, -0.08f, -0.08f, -0.08f), 64, skinWarp)
-        val frac = org.opencv.core.Core.mean(skinWarp).`val`[0] / 255.0
-        if (skinBaseline < 0) skinBaseline = frac
-        val hand = frac > skinBaseline + 0.012
-        if (!hand) skinBaseline = skinBaseline * 0.95 + frac * 0.05
-        lastSkin = frac
-        return hand
-    }
-
-    private var lastSkin = 0.0
+    private val edgeWatch = EdgeWatch()
+    private var lastMotion = 0.0
 
     /** Squares entirely inside the frame (the board may run off the edge). */
     private fun visibility(q: BoardQuad, w: Int, h: Int): BooleanArray {
@@ -377,7 +417,6 @@ class VisionPipeline {
     fun release() {
         tracker.release()
         warpMat.release()
-        skinWarp.release()
         scanAcc.release()
         scanTmp.release()
     }
@@ -385,5 +424,7 @@ class VisionPipeline {
     companion object {
         /** Still frames averaged for a position scan. */
         const val SCAN_FRAMES = 6
+        /** Frames between board-vs-app checks (~0.5 s at camera rate). */
+        const val CHECK_INTERVAL = 15L
     }
 }

@@ -47,43 +47,42 @@ object PositionGuesser {
      * @param current the game position, whose successors (up to [depth] plies) are tried too
      */
     fun guess(e: Evidence, known: List<Board>, current: Board?, depth: Int = 2): Guess {
-        // 1. A position we already know (or are a move or two away from).
-        val candidates = ArrayList<Board>()
-        candidates += known
-        candidates += Board.startPosition()
-        if (current != null) {
-            val b = current.copy()
-            fun walk(d: Int) {
-                if (d == 0) return
-                for (m in b.legalMoves()) {
-                    b.makeMove(m)
-                    candidates += b.copy()
-                    walk(d - 1)
-                    b.unmakeMove()
-                }
-            }
-            walk(depth)
-        }
+        // 1. A position we already know (or are a move or two away from). Successors are scored
+        // in place: copying a board copies its whole undo history.
         var best: Board? = null
         var bestCost = Double.MAX_VALUE
         var bestWorst = 0.0
-        for (c in candidates) {
+        fun consider(c: Board, keep: () -> Board) {
             var total = 0.0
             var worst = 0.0
             for (sq in 0 until 64) {
                 val k = squareCost(e, sq, c.squares[sq])
                 total += k
                 worst = max(worst, k)
-                if (total > bestCost) break
+                if (total > bestCost) return
             }
-            if (total < bestCost) {
-                bestCost = total; best = c; bestWorst = worst
+            bestCost = total; best = keep(); bestWorst = worst
+        }
+        for (k in known) consider(k) { k }
+        val start = Board.startPosition()
+        consider(start) { start }
+        if (current != null) {
+            val b = current.copy()
+            fun walk(d: Int) {
+                if (d == 0) return
+                for (m in b.legalMoves()) {
+                    b.makeMove(m)
+                    consider(b) { b.copy() }
+                    walk(d - 1)
+                    b.unmakeMove()
+                }
             }
+            walk(depth)
         }
-        if (best != null && bestCost <= EXACT_TOTAL && bestWorst <= EXACT_WORST) {
-            return Guess(best.squares.copyOf(), emptySet(), best.side, best.castling, exact = true, cost = bestCost)
+        val found = best
+        if (found != null && bestCost <= EXACT_TOTAL && bestWorst <= EXACT_WORST) {
+            return Guess(found.squares.copyOf(), emptySet(), found.side, found.castling, exact = true, cost = bestCost)
         }
-
         // 2. Rebuild from a reference position by assigning its pieces to the evidence.
         val bases = listOfNotNull(Board.startPosition(), best, current).distinctBy { it.placementFen() }
         return bases.map { assign(e, it) }.minBy { it.cost }
@@ -96,7 +95,7 @@ object PositionGuesser {
     private const val EXACT_WORST = 1.6
 
     /** Cost of [piece] (or empty) standing on [sq] given the evidence. */
-    private fun squareCost(e: Evidence, sq: Int, piece: Int): Double {
+    fun squareCost(e: Evidence, sq: Int, piece: Int): Double {
         val occ = e.occupancy[sq]
         if (piece == 0) return max(0.0, occ)
         val sign = if (Piece.color(piece) == WHITE) 1.0 else -1.0

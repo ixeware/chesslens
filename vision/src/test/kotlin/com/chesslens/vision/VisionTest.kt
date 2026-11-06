@@ -234,6 +234,26 @@ class VisionTest {
         println("physical mode on screen: ${playScreenGame(BoardSurface.PHYSICAL, seq)}")
     }
 
+    /** Tracking that drifted most of a square must not lock the grid one square off. */
+    @Test fun gridSnapsBackWhenTrackingIsOffBySquare() {
+        val start = Board.startPosition()
+        for ((name, outer) in listOf("frontal" to frontal, "tilted" to tilted)) {
+            val img = SyntheticBoard.render(start, outer, seed = 5)
+            val truth = SyntheticBoard.gridOf(outer)
+            val h = truth.boardToImage
+            for ((du, dv) in listOf(0.8f to 0f, 0f to -0.8f, -0.75f to 0.7f)) {
+                val drifted = BoardQuad(BoardQuad.BOARD_CORNERS.map { h.map(it.x + du, it.y + dv) })
+                val gl = GridLocator()
+                val r = gl.locate(img, prior = drifted, expected = start.squares)
+                println(gl.debugWindows)
+                assertNotNull("$name $du,$dv: not found", r)
+                val err = r!!.quad.alignedTo(truth).maxCornerDistance(truth)
+                println("$name drift ($du,$dv): error ${"%.1f".format(err)}px")
+                assertTrue("$name drift ($du,$dv): locked ${"%.1f".format(err)}px off", err < 4f)
+            }
+        }
+    }
+
     /** The X-corner locator finds a board that runs off the edge of the frame. */
     @Test fun gridLocatorHandlesBoardOffFrame() {
         val outer = tilted.map { Pt(it.x + 110f, it.y + 20f) }

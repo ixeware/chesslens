@@ -18,6 +18,7 @@ import com.chesslens.chess.PlayedMove
 import com.chesslens.chess.PositionGuesser
 import com.chesslens.chess.San
 import com.chesslens.chess.SearchLimits
+import com.chesslens.chess.Square
 import com.chesslens.chess.Tactics
 import com.chesslens.vision.BoardQuad
 import com.chesslens.vision.BoardScan
@@ -86,6 +87,8 @@ data class UiState(
     val settings: Settings = Settings(),
     val banner: Banner? = null,
     val startFen: String = Board.START_FEN,
+    /** Squares where the board and the app position disagree (from the periodic check). */
+    val mismatch: List<Int>? = null,
 ) {
     val isLive: Boolean get() = viewPly == moves.size
 }
@@ -110,7 +113,7 @@ sealed interface UiEvent {
 }
 
 /** Where the set-up position came from. */
-enum class SetupSource { NONE, SCAN_EXACT, SCAN_GUESS, STANDARD }
+enum class SetupSource { NONE, SCAN_EXACT, SCAN_GUESS, STANDARD, EDIT }
 
 /**
  * "New game" set-up: the camera reads the position off the board, the user checks the squares
@@ -220,14 +223,20 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun undo() {
-        if (game.moves.isEmpty()) return
+        if (!undoQuiet()) return
+        pipeline?.requestResync(afterMotion = true)
+        refresh(viewPly = game.moves.size)
+        analyzeCurrent()
+    }
+
+    /** Takes back the last move without touching the camera's reference picture. */
+    private fun undoQuiet(): Boolean {
+        if (game.moves.isEmpty()) return false
         game.undo()
         qualities.remove(game.moves.size)
         winLoss.remove(game.moves.size)
         visionBoard = game.current.copy()
-        pipeline?.requestResync(afterMotion = true)
-        refresh(viewPly = game.moves.size)
-        analyzeCurrent()
+        return true
     }
 
     fun newGame(fen: String = Board.START_FEN) {
@@ -250,6 +259,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens the set-up and asks the camera to read the position. */
     fun startSetup() {
         val p = pipeline
+        p?.positionChecks = false
         setupStartNs = System.nanoTime()
         if (p == null) {
             _setup.value = SetupState(scanning = false, source = SetupSource.STANDARD)
@@ -288,7 +298,19 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setupCancel() {
         pipeline?.cancelScan()
+        pipeline?.positionChecks = true
         _setup.value = null
+    }
+
+    /** Opens the set-up editor on the position shown, to correct pieces by hand. */
+    fun startEdit() {
+        val b = boardAtView()
+        pipeline?.cancelScan()
+        pipeline?.positionChecks = false
+        _setup.value = SetupState(
+            scanning = false, squares = b.squares.copyOf(), side = b.side, castling = b.castling,
+            orientation = _vision.value?.orientation, source = SetupSource.EDIT,
+        )
     }
 
     fun setupConfirm() {
@@ -302,8 +324,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         }
         s.orientation?.let { o -> if (o != _vision.value?.orientation) pipeline?.setOrientation(o) }
         _setup.value = null
+        pipeline?.positionChecks = true
         newGame(fen)
-        banner("New game · ${if (s.side == Piece.WHITE) "White" else "Black"} to move")
+        val who = if (s.side == Piece.WHITE) "White" else "Black"
+        banner(if (s.source == SetupSource.EDIT) "Position updated · $who to move" else "New game · $who to move")
     }
 
     /** Analyzer thread: scan progress and results. */
@@ -449,6 +473,33 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     if (sans.isNotEmpty() && e.confidence < 0.5f) banner("Read ${sans.joinToString(" ")} · Undo if that's wrong")
                 }
             }
+            is VisionEvent.CaughtUp -> viewModelScope.launch(Dispatchers.Main) {
+                if (boardUsed !== visionBoard || _setup.value != null) return@launch
+                if (!_state.value.isLive) refresh(viewPly = game.moves.size)
+                val taken = game.moves.takeLast(e.undo).map { it.san }
+                repeat(e.undo) { undoQuiet() }
+                val sans = ArrayList<String>()
+                for (m in e.moves) {
+                    if (m !in game.current.legalMoves()) break
+                    sans += San.of(game.current, m)
+                    playMove(m, fromCamera = true)
+                }
+                if (e.undo > 0 && sans.isEmpty()) { refresh(viewPly = game.moves.size); analyzeCurrent() }
+                banner(
+                    if (e.undo == 0) "Caught up from the board: ${sans.joinToString(" ")}"
+                    else "Fixed: ${taken.joinToString(" ")} → ${sans.joinToString(" ").ifEmpty { "taken back" }}",
+                )
+            }
+            is VisionEvent.PositionMismatch -> viewModelScope.launch(Dispatchers.Main) {
+                if (boardUsed !== visionBoard) return@launch
+                _state.update { it.copy(mismatch = e.squares.ifEmpty { null }) }
+            }
+            is VisionEvent.IllegalMove -> viewModelScope.launch(Dispatchers.Main) {
+                if (boardUsed !== visionBoard) return@launch
+                _events.tryEmit(UiEvent.Unrecognized(listOf(e.from, e.to)))
+                banner(illegalReason(game.current, e.from, e.to), error = true)
+                if (_state.value.settings.voice) speech.say("Illegal move")
+            }
             is VisionEvent.Unrecognized -> viewModelScope.launch(Dispatchers.Main) {
                 _events.tryEmit(UiEvent.Unrecognized(e.squares))
                 val now = System.nanoTime()
@@ -458,6 +509,22 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             else -> Unit
+        }
+    }
+
+    /** Why the move [from]→[to] (which the pieces could physically make) isn't legal. */
+    private fun illegalReason(b: Board, from: Int, to: Int): String {
+        val p = b.squares[from]
+        val side = if (b.side == Piece.WHITE) "White" else "Black"
+        val other = if (b.side == Piece.WHITE) "Black" else "White"
+        val name = Piece.name(Piece.type(p)).replaceFirstChar { it.uppercase() }
+        val move = "$name ${Square.name(from)}–${Square.name(to)}"
+        return when {
+            p == 0 -> "Illegal move"
+            Piece.color(p) != b.side -> "$move: it's $side's move — was a $side move missed? Tap the mini board to fix"
+            Piece.type(p) == Piece.KING -> "Illegal: the king can't go to ${Square.name(to)}, it would be in check"
+            b.inCheck() -> "Illegal: $side is in check — $other's attack must be answered"
+            else -> "Illegal: $move would leave the king in check"
         }
     }
 
@@ -613,6 +680,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 position = PositionSnapshot.of(board, san),
                 startFen = game.startFen,
                 qualities = HashMap(qualities),
+                // A new app position must be checked against the board again.
+                mismatch = null,
             )
         }
         updateEvalHistory()

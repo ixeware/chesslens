@@ -72,15 +72,16 @@ data class SetupActions(
  * whose move it is. Replaces the game panel while open so the camera keeps seeing the board.
  */
 @Composable
-fun SetupPanel(setup: SetupState, actions: SetupActions, landscape: Boolean, modifier: Modifier = Modifier) {
+fun SetupPanel(setup: SetupState, actions: SetupActions, landscape: Boolean, modifier: Modifier = Modifier, canScan: Boolean = true) {
     val type = MaterialTheme.typography
+    val edit = setup.source == SetupSource.EDIT
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("New game", style = type.headlineSmall, color = Lens.Text)
+                Text(if (edit) "Edit position" else "New game", style = type.headlineSmall, color = Lens.Text)
                 SetupStatus(setup)
             }
-            BevelIconButton(Icons.Rounded.Close, "Cancel new game", onClick = actions.onCancel)
+            BevelIconButton(Icons.Rounded.Close, if (edit) "Cancel editing" else "Cancel new game", onClick = actions.onCancel)
         }
         if (setup.scanning) {
             Meter(setup.progress)
@@ -94,18 +95,18 @@ fun SetupPanel(setup: SetupState, actions: SetupActions, landscape: Boolean, mod
         if (landscape) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SetupBoard(setup, actions.onSelect, Modifier.fillMaxWidth())
-                Editor(setup, actions)
+                Editor(setup, actions, canScan = canScan)
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SetupBoard(setup, actions.onSelect, Modifier.width(156.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Editor(setup, actions, compact = true)
+                    Editor(setup, actions, compact = true, canScan = canScan)
                 }
             }
         }
         GlowButton(
-            "Start game",
+            if (edit) "Apply" else "Start game",
             Icons.Rounded.PlayArrow,
             onClick = actions.onStart,
             modifier = Modifier.fillMaxWidth(),
@@ -124,6 +125,7 @@ private fun SetupStatus(setup: SetupState) {
         setup.scanning -> "Reading the board · hold still" to Lens.TextDim
         setup.problem != null -> setup.problem!! to Lens.Red
         setup.source == SetupSource.STANDARD -> "Starting position" to Lens.TextDim
+        setup.source == SetupSource.EDIT -> "Tap a square, then the piece that stands there" to Lens.TextDim
         setup.source == SetupSource.SCAN_EXACT -> "Read ${setup.pieceCount} pieces · matches a known position" to Lens.Green
         unsure > 0 -> "Read ${setup.pieceCount} pieces · check the $unsure amber ${if (unsure == 1) "square" else "squares"}" to Lens.Amber
         else -> "Read ${setup.pieceCount} pieces" to Lens.Green
@@ -133,7 +135,7 @@ private fun SetupStatus(setup: SetupState) {
 
 /** Side to move, piece palette and the secondary actions. */
 @Composable
-private fun ColumnScope.Editor(setup: SetupState, actions: SetupActions, compact: Boolean = false) {
+private fun ColumnScope.Editor(setup: SetupState, actions: SetupActions, compact: Boolean = false, canScan: Boolean = true) {
     Text("To move", style = MaterialTheme.typography.labelMedium, color = Lens.TextMuted)
     Segmented(
         listOf(TabItem("White"), TabItem("Black")),
@@ -143,9 +145,9 @@ private fun ColumnScope.Editor(setup: SetupState, actions: SetupActions, compact
     )
     Palette(setup, actions)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        BevelButton(onClick = { actions.onRescan(false) }, modifier = Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 10.dp)) {
+        if (canScan) BevelButton(onClick = { actions.onRescan(false) }, modifier = Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 10.dp)) {
             Icon(Icons.Rounded.DocumentScanner, null, tint = Lens.Green, modifier = Modifier.size(18.dp))
-            Text(if (compact) "Rescan" else "Scan again", style = MaterialTheme.typography.labelMedium, color = Lens.Text, maxLines = 1)
+            Text(if (setup.source == SetupSource.EDIT) "Scan" else if (compact) "Rescan" else "Scan again", style = MaterialTheme.typography.labelMedium, color = Lens.Text, maxLines = 1)
         }
         BevelButton(onClick = actions.onStandard, modifier = Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 10.dp)) {
             Icon(Icons.Rounded.RestartAlt, null, tint = Lens.TextDim, modifier = Modifier.size(18.dp))
