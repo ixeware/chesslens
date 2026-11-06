@@ -11,3 +11,6 @@ build/
 *.aab
 *.keystore
 !debug.keystore
+
+# Local hand-off folder for shared builds and previews (not source)
+/dist/
